@@ -6,4 +6,7 @@ plugins {
     alias(libs.plugins.compose) apply false
     alias(libs.plugins.kotlin.serialization) apply false
     alias(libs.plugins.ksp) apply false
+    // PC 端模块（:core / :playback-core / :playback-vlc / :desktop），Android 侧不受影响
+    alias(libs.plugins.kotlin.jvm) apply false
+    alias(libs.plugins.compose.multiplatform) apply false
 }

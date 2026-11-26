@@ -7,6 +7,8 @@ import com.mytv.mymusic.data.TopList
 import com.mytv.mymusic.data.Playlist as CorePlaylist
 import com.mytv.mymusic.data.ProviderInfo as CoreProviderInfo
 import com.mytv.mymusic.data.native.NativeProviders
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import java.io.File
 
 /**
@@ -94,7 +96,7 @@ class CoreMusicCatalog(
         // 部分平台不给 hotSongs（接口要登录），退一步用榜首榜单的前几首，首屏不至于空白
         val songs = if (hot.isNotEmpty()) hot else {
             val first = topLists.firstOrNull()
-            first?.let { guarded("$id 榜单曲目") { repository.topListSongs(id, it.id) }.orEmpty() } ?: emptyList()
+            first?.let { guarded("$id 榜单曲目") { repository.topListSongs(id, cookies.get(id), it.id) }.orEmpty() } ?: emptyList()
         }
         return ChartsPayload(
             charts = charts,
@@ -131,20 +133,15 @@ class CoreMusicCatalog(
             SearchKind.Album -> providerIds.flatMap { id ->
                 guarded("$id 专辑搜索") { repository.searchAlbums(id, cookies.get(id), keyword) }
                     .orEmpty()
-                    .map { it.toUi(id) as Track } // 专辑在 UI 上先按"曲目行"展示，点开走详情占位
+                    // 专辑/歌单在结果列表里先当「一行」展示，点开走详情（B2 不做详情）
+                    .map { it.toUi(id).toTrackRow(id) }
             }.distinctBy { it.title + it.artist }
 
             SearchKind.Playlist -> providerIds.flatMap { id ->
                 guarded("$id 歌单搜索") { repository.searchPlaylists(id, cookies.get(id), keyword) }
                     .orEmpty()
-                    .map { it.toUi(id) as Track }
+                    .map { it.toUi(id).toTrackRow(id) }
             }.distinctBy { it.title + it.artist }
-
-            SearchKind.Artist -> providerIds.flatMap { id ->
-                guarded("$id 歌手搜索") { repository.searchArtists(id, cookies.get(id), keyword) }
-                    .orEmpty()
-                    .map { it.toUi(id) as Track }
-            }.distinctBy { it.title }
         }
     }
 
@@ -158,7 +155,7 @@ class CoreMusicCatalog(
     private suspend fun searchSongs(providerIds: List<String>, keyword: String): List<Track> =
         kotlinx.coroutines.coroutineScope {
             val results = providerIds.map { id ->
-                kotlinx.coroutines.async(kotlinx.coroutines.Dispatchers.IO) {
+                async(Dispatchers.IO) {
                     id to guarded("$id 搜索") { repository.searchSongs(id, cookies.get(id), keyword) }.orEmpty()
                 }
             }.map { it.await() }
@@ -170,7 +167,7 @@ class CoreMusicCatalog(
 
     override suspend fun chartTracks(chart: ChartSummary): List<Track> {
         val id = chart.sourceId.ifBlank { defaultProviderId }
-        return guarded("榜单曲目") { repository.topListSongs(id, chart.id) }
+        return guarded("榜单曲目") { repository.topListSongs(id, cookies.get(id), chart.id) }
             .orEmpty()
             .map { it.toUi(id) }
     }
@@ -264,6 +261,22 @@ class CoreMusicCatalog(
         coverUrl = cover,
         sourceId = source.ifBlank { providerId },
     )
+
+    /**
+     * 专辑 / 歌单在搜索结果里先按「一行」展示：标题取集合名，歌手位放创建者，没有就放曲目数。
+     * 点开详情是后续批次的事，B2 只要求列表能看、能点。
+     */
+    private fun PlaylistSummary.toTrackRow(providerId: String): Track {
+        val source = sourceId.ifBlank { providerId }
+        return Track(
+            id = id,
+            title = name,
+            artist = curator.ifBlank { if (trackCount > 0) "$trackCount 首" else "" },
+            providerId = source,
+            providerName = providers.firstOrNull { it.id == source }?.name ?: source,
+            coverUrl = coverUrl,
+        )
+    }
 
     private fun CoreProviderInfo.toUi(): ProviderInfo = ProviderInfo(
         id = id,

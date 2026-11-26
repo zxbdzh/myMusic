@@ -82,7 +82,7 @@ private fun screenshotTarget(args: Array<String>): String? {
 
 /** 正常启动：系统集成（托盘/热键/任务栏/SMTC）+ 主窗口 + 悬浮歌词窗。 */
 private fun launchDesktop() = application {
-    val store = remember { DefaultMusicStore() }
+    val store = remember { DefaultMusicStore(catalog = CoreMusicCatalog(DesktopPaths())) }
     // 后台验收用：MYMUSIC_BACKGROUND=1 时窗口不抢焦点（默认行为仍是正常激活）
     val background = remember { System.getenv("MYMUSIC_BACKGROUND") == "1" }
 
@@ -279,7 +279,8 @@ private object ScreenshotRunner {
     }
 
     private fun render(dir: File, shot: Shot) {
-        val store = DefaultMusicStore()
+        // 截图 runner 与真实窗口共用同一份装配：接 DemoFixtures 会出假图，验收就没有意义
+        val store = DefaultMusicStore(catalog = CoreMusicCatalog(DesktopPaths()))
         try {
             runBlocking {
                 store.bootstrap()

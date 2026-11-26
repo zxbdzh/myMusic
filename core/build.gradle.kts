@@ -29,7 +29,15 @@ dependencies {
     api(libs.kotlinx.coroutines.core)
     // 各平台取流 / 搜索全部走 OkHttp，属下游可见类型，不做 implementation 隐藏
     api(libs.okhttp)
+    // 局域网歌单面板 / 同步配网面板 / 电视输入面板各自起一个 NanoHTTPD 服务
+    implementation(libs.nanohttpd)
+    // 注：Room 还没有进 :core —— 实体与 DAO 仍留在 :app 的 AppStore，
+    // 搬迁步骤与依赖写法见 docs/pc/ROOM-SPIKE.md §5（room-runtime + sqlite-bundled，**不要** room-ktx）。
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    // WebDAV 同步位置的测试用它模拟服务器（PROPFIND、条件写入、412）
+    testImplementation(libs.okhttp.mockwebserver)
+    // 证书钉住的测试在测试里现生成自签名证书和根证书
+    testImplementation(libs.okhttp.tls)
 }

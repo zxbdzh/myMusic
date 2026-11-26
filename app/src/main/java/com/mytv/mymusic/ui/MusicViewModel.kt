@@ -705,7 +705,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val matchJob = MatchJob(
         repository = app.repository,
         cookies = { settingsState.value.cookies },
-        dao = aggregateDao,
+        cache = com.mytv.mymusic.data.RoomMatchCacheStore(aggregateDao),
         settings = { settingsState.value.aggregation },
     )
 
@@ -3968,7 +3968,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
                 val result = matchJob.matchOne(originalSong, providerId)
-                if (!result.matched || result.song == null) {
+                // MatchJob 搬进 :core 后 MatchResult.song 是跨模块的公开属性，不能直接智能转型；
+                // 先落到本地变量，语义与搬迁前一致。
+                val matchedSong = result.song
+                if (!result.matched || matchedSong == null) {
                     base.value = base.value.copy(
                         sourcePickerBusy = "",
                         sourcePickerError = result.reason.ifBlank { "未找到同一版本" },
@@ -3978,7 +3981,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 TrackSource(
                     providerId = providerId,
                     providerName = providerName(providerId),
-                    song = result.song,
+                    song = matchedSong,
                     matchScore = result.score,
                     matchMethod = result.method,
                 )

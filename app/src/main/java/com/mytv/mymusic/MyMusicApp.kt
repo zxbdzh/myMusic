@@ -13,6 +13,7 @@ import com.mytv.mymusic.data.AccountProfileStore
 import com.mytv.mymusic.data.ListenTaskStore
 import com.mytv.mymusic.data.MusicRepository
 import com.mytv.mymusic.data.SettingsStore
+import com.mytv.mymusic.data.lx.LxPlaybackHost
 import com.mytv.mymusic.data.lx.LxSources
 import com.mytv.mymusic.data.native.AppleTokenCache
 import com.mytv.mymusic.data.native.NativeProviders
@@ -131,7 +132,11 @@ class MyMusicApp : Application(), ViewModelStoreOwner, Configuration.Provider {
         super.onCreate()
         // 先于仓库、数据库和后台组件安装；写报告失败也会交还 Android 原 handler。
         CrashReporter.install(this)
+        // :core 的平台缝先装：日志出口、平台事实、TLS 附加信任锚、WebView 登录通道、留在 :app 的 provider
+        AndroidPlatformSeams.install(this)
         LxSources.attach(this)
+        // 洛雪自定义音源搬不走（Context + QuickJS），这里把实现交给 :core 的注入点
+        LxPlaybackHost.current = LxSources
         AppleTokenCache.attach(this)
         val backgroundWork = BackgroundWork.available(this)
         if (!backgroundWork) {
@@ -196,7 +201,7 @@ class MyMusicApp : Application(), ViewModelStoreOwner, Configuration.Provider {
         }
         localUploads.start()
         // 日志导出用的设备和版本信息，启动时采一次就够
-        AppLog.captureHeader(this)
+        AppLogAndroid.captureHeader(this)
         queueStore = QueueStore(this)
         listenTasks = ListenTaskStore(this)
         accountProfiles = AccountProfileStore(this)

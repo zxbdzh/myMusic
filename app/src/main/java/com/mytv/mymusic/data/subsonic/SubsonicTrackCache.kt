@@ -58,10 +58,10 @@ class SubsonicTrackCache(
     private val dao: SubsonicTrackDao,
     private val account: SubsonicAccount,
     private val covers: SubsonicCoverCache?,
-) {
+) : SubsonicTrackStore {
     private val json = Json { ignoreUnknownKeys = true }
 
-    suspend fun putAll(songs: List<Song>) {
+    override suspend fun putAll(songs: List<Song>) {
         if (songs.isEmpty()) return
         val now = System.currentTimeMillis()
         dao.putAll(
@@ -85,7 +85,7 @@ class SubsonicTrackCache(
         )
     }
 
-    suspend fun search(query: String, limit: Int, offset: Int): List<Song> =
+    override suspend fun search(query: String, limit: Int, offset: Int): List<Song> =
         dao.search(account.id, query, limit, offset).map(::song)
 
     suspend fun list(limit: Int, offset: Int): List<Song> = dao.list(account.id, limit, offset).map(::song)
@@ -105,7 +105,7 @@ class SubsonicTrackCache(
             bitrate = row.bitrate,
             source = account.providerId,
             ext = row.suffix,
-            cover = covers?.uri(account.id, row.coverArt).orEmpty(),
+            cover = covers?.uri(account.id, row.coverArt, 300).orEmpty(),
             extra = extra,
         )
     }

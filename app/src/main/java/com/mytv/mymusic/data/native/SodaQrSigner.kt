@@ -34,9 +34,6 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.resume
 
-/** 签名页单次请求的结果：响应体 + WebView cookie jar 里该 URL 当前可见的 Cookie。 */
-internal class SodaPageResponse(val status: Int, val body: String, val cookieHeader: String)
-
 /**
  * 汽水扫码登录的「签名页」：隐藏 WebView 里跑 libresoda 内置的官方安全组件
  * （assets/soda/security/：security_host.html + sdk-glue.js + bdms.js）。

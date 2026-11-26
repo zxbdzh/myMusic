@@ -1,0 +1,237 @@
+package com.mytv.mymusic.data.native
+
+import com.mytv.mymusic.data.AlbumDetail
+import com.mytv.mymusic.data.AlbumSummary
+import com.mytv.mymusic.data.ArtistAlbumPage
+import com.mytv.mymusic.data.ArtistDetail
+import com.mytv.mymusic.data.CollectionResult
+import com.mytv.mymusic.data.ListeningMode
+import com.mytv.mymusic.data.Playlist
+import com.mytv.mymusic.data.PlaylistCategory
+import com.mytv.mymusic.data.ProviderInfo
+import com.mytv.mymusic.data.QRCheckResult
+import com.mytv.mymusic.data.QRCreateResult
+import com.mytv.mymusic.data.Song
+import com.mytv.mymusic.data.SongCommentPage
+import com.mytv.mymusic.data.TopList
+import java.io.File
+import java.net.URI
+import java.util.Locale
+
+data class SongSearchPage(
+    val songs: List<Song>,
+    val page: Int,
+    val hasMore: Boolean,
+)
+
+/** 解析出的播放流：地址之外带回真实音质，界面上的音质标签用它而不是搜索结果的估算值。 */
+data class PlayableStream(
+    val url: String,
+    val ext: String = "",
+    val bitrate: Int = 0,
+    val level: String = "",
+    /** 取流之后才知道只是试听片段（汽水会员曲只给出片段地址）；解析器按它继续尝试其他平台。 */
+    val preview: Boolean = false,
+    /** 取流响应里带回来的附加信息（响度 gain/peak 等），会合并进播放队列里的 Song.extra。 */
+    val extra: Map<String, String> = emptyMap(),
+)
+
+/** 已登录账号的资料，用于账号卡片；拿不到就只显示“已登录”。 */
+data class AccountInfo(val nickname: String = "", val avatar: String = "", val detail: String = "")
+
+interface NativeProvider {
+    val info: ProviderInfo
+    val supportsSearchPagination: Boolean get() = false
+
+    suspend fun searchSongs(cookie: String, keyword: String): List<Song> =
+        throw UnsupportedOperationException("${info.name} 暂不支持搜索")
+
+    suspend fun searchSongsPage(cookie: String, keyword: String, page: Int, limit: Int): SongSearchPage =
+        SongSearchPage(searchSongs(cookie, keyword), page, false)
+
+    suspend fun parseSong(cookie: String, link: String): Song =
+        throw UnsupportedOperationException("${info.name} 暂不支持歌曲链接解析")
+
+    /**
+     * 播放地址。[quality] 非 auto 时只准拿这一档，拿不到就报错——不静默降到低档，
+     * 否则用户选了无损、实际播的是 128k，界面上还看不出来。
+     */
+    suspend fun downloadUrl(cookie: String, song: Song, quality: AudioQuality = AudioQuality.Auto): String =
+        throw UnsupportedOperationException("${info.name} 暂不支持播放地址解析")
+
+    /**
+     * 交给播放器的地址。默认沿用 downloadUrl；需要下载后解密的平台（汽水加密流）
+     * 会先把明文写到 [workDir] 并返回本地文件 URI。
+     */
+    suspend fun playableStream(
+        cookie: String,
+        song: Song,
+        workDir: File,
+        quality: AudioQuality = AudioQuality.Auto,
+    ): PlayableStream {
+        val url = song.url.ifBlank { downloadUrl(cookie, song, quality) }
+        return PlayableStream(url = url, ext = song.ext.ifBlank { extensionFromUrl(url) }, bitrate = song.bitrate)
+    }
+
+    /**
+     * 丢掉这个平台上缓存的取流地址。地址被 CDN 拒了（403/401/404）时要重新取一遍才可能有救，
+     * 不然命中的还是同一条过期地址。默认没有缓存，什么都不做。
+     */
+    fun invalidateStreamUrls() {}
+
+    /**
+     * 当前账号在这个平台上实际能选的音质档，从高到低。默认空表：界面只显示“自动”，
+     * 不暴露平台其实不支持的档位。移植自 music-lib 的 `provider.AudioQualityProvider`。
+     */
+    suspend fun availableQualityOptions(cookie: String): List<AudioQualityOption> = emptyList()
+
+    suspend fun lyrics(cookie: String, song: Song): String =
+        throw UnsupportedOperationException("${info.name} 暂不支持歌词")
+
+    /** 歌曲评论；只读，[page] 从 1 开始。 */
+    suspend fun comments(cookie: String, song: Song, page: Int, limit: Int): SongCommentPage =
+        throw UnsupportedOperationException("${info.name} 暂不支持歌曲评论")
+
+    suspend fun searchPlaylists(cookie: String, keyword: String): List<Playlist> =
+        throw UnsupportedOperationException("${info.name} 暂不支持歌单搜索")
+
+    suspend fun playlistSongs(cookie: String, id: String): List<Song> =
+        throw UnsupportedOperationException("${info.name} 暂不支持歌单歌曲")
+
+    suspend fun parsePlaylist(cookie: String, link: String): CollectionResult =
+        throw UnsupportedOperationException("${info.name} 暂不支持歌单链接解析")
+
+    suspend fun recommendedPlaylists(cookie: String): List<Playlist> =
+        throw UnsupportedOperationException("${info.name} 暂不支持推荐歌单")
+
+    /** 听歌模式入口：场景 / 心情 / 风格驱动的推荐流，不是歌单。 */
+    suspend fun listeningModes(cookie: String): List<ListeningMode> =
+        throw UnsupportedOperationException("${info.name} 暂不支持听歌模式")
+
+    /** 取某个听歌模式的一批歌曲；同一模式每次调用返回的歌曲不同。 */
+    suspend fun listeningModeSongs(cookie: String, mode: ListeningMode): List<Song> =
+        throw UnsupportedOperationException("${info.name} 暂不支持听歌模式")
+
+    suspend fun searchAlbums(cookie: String, keyword: String): List<Playlist> =
+        throw UnsupportedOperationException("${info.name} 暂不支持专辑搜索")
+
+    suspend fun searchArtists(cookie: String, keyword: String): List<Playlist> =
+        throw UnsupportedOperationException("${info.name} 暂不支持歌手搜索")
+
+    /** 歌手的歌曲。搜索结果里带上的歌手条目用 Playlist 表示，id 即歌手 id。 */
+    suspend fun artistSongs(cookie: String, id: String): List<Song> =
+        throw UnsupportedOperationException("${info.name} 暂不支持歌手歌曲")
+
+    suspend fun albumSongs(cookie: String, id: String): List<Song> =
+        throw UnsupportedOperationException("${info.name} 暂不支持专辑歌曲")
+
+    suspend fun parseAlbum(cookie: String, link: String): CollectionResult =
+        throw UnsupportedOperationException("${info.name} 暂不支持专辑链接解析")
+
+    /**
+     * 歌手主页资料：头像、简介、歌曲 / 专辑 / 粉丝数。没有专门接口的平台不实现，
+     * 歌手页退回搜索结果里带的资料（名字、头像、歌曲数）。
+     */
+    suspend fun artistDetail(cookie: String, id: String): ArtistDetail =
+        throw UnsupportedOperationException("${info.name} 暂不支持歌手资料")
+
+    /**
+     * 歌手的专辑，按发行时间从新到旧；[page] 从 1 开始。不实现的平台由歌手页从歌手歌曲里按专辑归并。
+     */
+    suspend fun artistAlbums(cookie: String, id: String, page: Int, limit: Int): ArtistAlbumPage =
+        throw UnsupportedOperationException("${info.name} 暂不支持歌手专辑")
+
+    /**
+     * 专辑详情：头部资料（发行时间、厂牌、简介、主歌手 id）+ 曲目。
+     * 默认只有曲目，头部由调用方拿打开时带的名字、封面补；有专辑详情接口的平台覆写它。
+     */
+    suspend fun albumDetail(cookie: String, id: String): AlbumDetail =
+        AlbumDetail(AlbumSummary(id = id, name = "", source = info.id), albumSongs(cookie, id))
+
+    suspend fun categories(cookie: String): List<PlaylistCategory> =
+        throw UnsupportedOperationException("${info.name} 暂不支持歌单分类")
+
+    suspend fun categoryPlaylists(cookie: String, id: String, page: Int, limit: Int): List<Playlist> =
+        throw UnsupportedOperationException("${info.name} 暂不支持分类歌单")
+
+    suspend fun userPlaylists(cookie: String, page: Int, limit: Int): List<Playlist> =
+        throw UnsupportedOperationException("${info.name} 暂不支持个人歌单")
+
+    suspend fun topLists(cookie: String): List<TopList> =
+        throw UnsupportedOperationException("${info.name} 暂不支持排行榜")
+
+    suspend fun topListSongs(cookie: String, id: String): List<Song> =
+        throw UnsupportedOperationException("${info.name} 暂不支持榜单歌曲")
+
+    suspend fun hotSongs(cookie: String, limit: Int): List<Song> =
+        throw UnsupportedOperationException("${info.name} 暂不支持热门单曲")
+
+    suspend fun createLogin(type: String): QRCreateResult =
+        throw UnsupportedOperationException("${info.name} 暂不支持扫码登录")
+
+    suspend fun checkLogin(sessionId: String, key: String): QRCheckResult =
+        throw UnsupportedOperationException("${info.name} 暂不支持扫码登录")
+
+    /** 放弃这次扫码登录：把平台侧占用的资源（隐藏 WebView、会话）释放掉。 */
+    fun cancelLogin(sessionId: String) = Unit
+
+    /** 用户名 + 密码登录，返回可直接存进平台账号的 Cookie 字符串。 */
+    suspend fun passwordLogin(username: String, password: String): String =
+        throw UnsupportedOperationException("${info.name} 暂不支持账号密码登录")
+
+    /**
+     * 这个平台有没有账号侧的「收藏」：把一首歌加进平台账号的我喜欢 / 收藏夹。
+     * 和本机收藏是两件事：这个写去平台，换设备也在。默认 false，界面据此决定显不显示这一行。
+     */
+    fun supportsCollect(): Boolean = false
+
+    /** 收藏到平台账号；没实现或没登录时抛 [UnsupportedOperationException]。 */
+    suspend fun collectTrack(cookie: String, song: Song) {
+        throw UnsupportedOperationException("${info.name} 暂不支持收藏")
+    }
+
+    /** 从平台账号取消收藏。 */
+    suspend fun uncollectTrack(cookie: String, song: Song) {
+        throw UnsupportedOperationException("${info.name} 暂不支持取消收藏")
+    }
+
+    /** 登录账号的昵称、头像、会员/等级；null 表示这个平台没有实现或资料不可用。 */
+    suspend fun accountInfo(cookie: String): AccountInfo? = null
+
+    /**
+     * 这个歌单能不能用当前账号修改。null 表示平台没法判断（网络失败、未登录或没实现），
+     * 调用方按“可以试”处理，写失败时再给原因。
+     */
+    suspend fun playlistWritable(cookie: String, id: String): Boolean? = null
+
+    /** 往平台歌单里加歌；[songs] 必须已经是这个平台的曲目。 */
+    suspend fun addPlaylistTracks(cookie: String, playlistId: String, songs: List<Song>) {
+        throw PlaylistWriteException("${info.name} 暂不支持修改歌单", PlaylistWriteFailure.Unsupported)
+    }
+
+    /** 从平台歌单里删歌；[songs] 必须已经是这个平台的曲目。 */
+    suspend fun removePlaylistTracks(cookie: String, playlistId: String, songs: List<Song>) {
+        throw PlaylistWriteException("${info.name} 暂不支持修改歌单", PlaylistWriteFailure.Unsupported)
+    }
+
+    /** 把整张歌单按 [songs] 的新顺序写回平台；必须是歌单内的全部歌曲。 */
+    suspend fun reorderPlaylistTracks(cookie: String, playlistId: String, songs: List<Song>) {
+        throw PlaylistWriteException("${info.name} 暂不支持调整歌单顺序", PlaylistWriteFailure.Unsupported)
+    }
+}
+
+abstract class BaseNativeProvider(override val info: ProviderInfo) : NativeProvider
+
+private val AUDIO_EXTENSIONS = setOf("mp3", "flac", "m4a", "aac", "ogg", "opus", "wav")
+
+/** 从播放地址路径里取音频扩展名；取不到或不是已知格式就返回空串。 */
+fun extensionFromUrl(url: String): String {
+    if (url.startsWith("file:")) {
+        val name = runCatching { URI(url).path }.getOrNull().orEmpty().substringAfterLast('/')
+        return name.substringAfterLast('.', "").lowercase(Locale.ROOT).takeIf { it in AUDIO_EXTENSIONS }.orEmpty()
+    }
+    val path = runCatching { URI(url).path }.getOrNull().orEmpty()
+    return path.substringAfterLast('/').substringAfterLast('.', "").lowercase(Locale.ROOT)
+        .takeIf { it in AUDIO_EXTENSIONS }
+        .orEmpty()
+}

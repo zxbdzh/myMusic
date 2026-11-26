@@ -7,7 +7,7 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
 
-class SubsonicCoverCache(context: Context) {
+class SubsonicCoverCache(context: Context) : SubsonicCoverSource {
     private val root = File(context.cacheDir, "subsonic-covers")
     private val gate = Semaphore(2)
 
@@ -16,7 +16,7 @@ class SubsonicCoverCache(context: Context) {
         return File(File(root, safeAccount), "${md5(coverArt)}@$size.image")
     }
 
-    fun uri(accountId: String, coverArt: String, size: Int = 300): String =
+    override fun uri(accountId: String, coverArt: String, size: Int): String =
         SubsonicCoverUris.create(SUBSONIC_PROVIDER_PREFIX + accountId, coverArt, size)
 
     suspend fun ensure(client: SubsonicClient, coverArt: String, size: Int = 300) {

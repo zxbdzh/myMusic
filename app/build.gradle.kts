@@ -103,6 +103,9 @@ androidComponents {
 }
 
 dependencies {
+    // PC 端与 Android 端共用的核心层：模型、聚合匹配、原生平台实现、同步/网盘/云盘客户端。
+    // 源码包名保持不变（com.mytv.mymusic.*），所以业务代码的 import 一行都不用改。
+    implementation(project(":core"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)

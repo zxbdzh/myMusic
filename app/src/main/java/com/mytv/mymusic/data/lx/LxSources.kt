@@ -115,7 +115,7 @@ object LxSources : LxPlayback {
 
     /** 最近一次洛雪取流失败的原因，换源失败时给用户看的提示用。 */
     @Volatile
-    var lastFailure: String = ""
+    override var lastFailure: String = ""
 
     /** 整轮脚本尝试的总时限：超时让 SourceResolver 继续下一个候选，而不是整首卡住。 */
     private const val RESOLVE_TIMEOUT_MS = 30_000L

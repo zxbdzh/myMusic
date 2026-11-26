@@ -11,6 +11,20 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class NativeProvidersTest {
+    companion object {
+        /**
+         * Apple / Spotify / MHub 三个实现留在 :app（Widevine、android.util.Base64、附加信任锚），
+         * :core 的 NativeProviders 只留工厂位。单元测试跑不到 Application.onCreate，
+         * 这里按同样的顺序补登记，保证 16 个内置平台齐全、与搬迁前一致。
+         */
+        @JvmStatic
+        @org.junit.BeforeClass
+        fun installAppProviders() {
+            NativeProviders.registerFactory("apple") { com.mytv.mymusic.data.native.AppleProvider() }
+            NativeProviders.registerFactory("spotify") { com.mytv.mymusic.data.native.SpotifyProvider() }
+            NativeProviders.registerFactory("mhub") { com.mytv.mymusic.data.native.MHubProvider() }
+        }
+    }
     @Test
     fun allNativeProvidersAreRegistered() {
         val expected = setOf(

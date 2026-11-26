@@ -101,7 +101,7 @@ class CloudHub(
     @OptIn(UnstableApi::class)
     fun routing(fallback: DataSource.Factory): DataSource.Factory = WebDavRoutingDataSourceFactory(
         baseUrl = { webDavAccounts.info.value?.serverUrl?.let(WebDavPaths::parseServerUrl) },
-        webdav = { webDav()?.dataSourceFactory },
+        webdav = { webDav()?.dataSourceFactory as? DataSource.Factory },
         fallback = fallback,
     )
 

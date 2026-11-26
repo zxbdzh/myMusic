@@ -72,14 +72,19 @@ fun coverSeedColor(key: String): Color {
     return Color.hsv(hue, 0.48f, 0.66f)
 }
 
-/** 程序化封面：[seedKey] 决定配色，[label] 画首字。 */
+/** 程序化封面：[seedKey] 决定配色，[label] 画首字；[imageUrl] 非空时优先显示网络图（失败自动回落）。 */
 @Composable
 fun CoverArt(
     seedKey: String,
     label: String,
     modifier: Modifier = Modifier,
     corner: Dp = 14.dp,
+    imageUrl: String = "",
 ) {
+    if (imageUrl.isNotBlank()) {
+        CoverImage(imageUrl = imageUrl, seedKey = seedKey, label = label, modifier = modifier, corner = corner)
+        return
+    }
     val hue = remember(seedKey) { hueOf(seedKey) }
     val start = remember(hue) { Color.hsv(hue, 0.52f, 0.62f) }
     val end = remember(hue) { Color.hsv((hue + 38f) % 360f, 0.62f, 0.34f) }
@@ -223,7 +228,7 @@ fun TrackRow(
                 )
             }
         }
-        CoverArt(seedKey = track.id, label = track.title, modifier = Modifier.size(40.dp), corner = 10.dp)
+        CoverArt(seedKey = track.id, label = track.title, modifier = Modifier.size(40.dp), corner = 10.dp, imageUrl = track.coverUrl)
         Column(Modifier.weight(1.2f)) {
             Text(
                 text = track.title,
@@ -337,6 +342,7 @@ fun PlaylistCard(playlist: PlaylistSummary, onClick: () -> Unit, modifier: Modif
             label = playlist.name,
             modifier = Modifier.fillMaxWidth().height(148.dp),
             corner = 14.dp,
+            imageUrl = playlist.coverUrl,
         )
         Spacer(Modifier.height(10.dp))
         Text(

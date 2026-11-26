@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    myMusic SMTC 桥（Windows 媒体浮层）。
+
+    为什么是「独立进程 + stdin/stdout JSON」而不是进程内 native 库：
+      · 进程内方案只有 NativeAOT 一条路，实测 AOT 构建里的 MediaPlayer 拿到的 SMTC
+        对象 IsEnabled=True 却**不会**注册到系统会话列表（见 docs/pc/SMTC-SPIKE.md 的实验记录）；
+      · 独立进程按 JIT 跑，投影完整，SMTC 注册成功（同一份代码、同一个 SDK，仅发布方式不同）；
+      · 崩溃隔离：桥挂了只是媒体浮层消失，JVM 侧捕获后降级，不影响播放。
+
+    目标框架必须带 Windows SDK 投影（net*-windows10.0.19041.0），否则拿不到
+    Windows.Media.Playback / Windows.Media.Control 这两组 WinRT 类型。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <AssemblyName>myMusic.SmtcBridge</AssemblyName>
+    <RootNamespace>MyMusic.SmtcBridge</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- 自包含单文件：目标机不需要装 .NET 运行时。
+         裁剪后约 13 MB，未裁剪 94 MB，差异见 SMTC-SPIKE.md 的体积表 -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>true</PublishTrimmed>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>none</DebugType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+</Project>

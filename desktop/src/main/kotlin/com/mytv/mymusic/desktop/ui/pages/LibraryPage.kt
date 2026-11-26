@@ -165,6 +165,7 @@ private fun LocalPlaylistRow(playlist: PlaylistSummary, onOpen: () -> Unit) {
             label = playlist.name,
             modifier = Modifier.size(44.dp),
             corner = 12.dp,
+            imageUrl = playlist.coverUrl,
         )
         Column(Modifier.weight(1f)) {
             Text(

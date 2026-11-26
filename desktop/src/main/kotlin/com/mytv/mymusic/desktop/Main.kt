@@ -17,12 +17,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import com.mytv.mymusic.desktop.state.CoreMusicCatalog
 import com.mytv.mymusic.desktop.state.DefaultMusicStore
 import com.mytv.mymusic.desktop.state.DemoFixtures
+import com.mytv.mymusic.desktop.state.DesktopPaths
 import com.mytv.mymusic.desktop.state.MusicStore
+import com.mytv.mymusic.desktop.state.SearchKind
 import com.mytv.mymusic.desktop.state.MusicUiState
 import com.mytv.mymusic.desktop.state.Route
 import com.mytv.mymusic.desktop.ui.AppShell
+import com.mytv.mymusic.desktop.ui.components.RemoteImages
 import com.mytv.mymusic.desktop.win.FloatingLyricsWindow
 import com.mytv.mymusic.desktop.win.LyricLine
 import com.mytv.mymusic.desktop.win.MediaCommand

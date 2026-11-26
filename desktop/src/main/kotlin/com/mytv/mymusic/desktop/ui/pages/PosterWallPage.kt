@@ -177,6 +177,7 @@ private fun WallTile(
                 label = track.title,
                 modifier = Modifier.fillMaxSize(),
                 corner = 18.dp,
+                imageUrl = track.coverUrl,
             )
             if (active) {
                 Box(

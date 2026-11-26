@@ -63,6 +63,7 @@ fun MiniPlayerBar(state: MusicUiState, store: MusicStore) {
                         .size(52.dp)
                         .clickable(onClick = store::openPlayer),
                     corner = 12.dp,
+                    imageUrl = track.coverUrl,
                 )
                 Column(Modifier.weight(1f)) {
                     Text(

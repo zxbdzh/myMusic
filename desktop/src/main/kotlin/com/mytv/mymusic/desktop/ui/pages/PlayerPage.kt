@@ -145,6 +145,7 @@ private fun PlayerStage(
             label = track.title,
             modifier = Modifier.size(320.dp),
             corner = 28.dp,
+            imageUrl = track.coverUrl,
         )
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
@@ -265,6 +266,7 @@ private fun UpNextSection(state: MusicUiState, store: MusicStore) {
                     label = track.title,
                     modifier = Modifier.size(32.dp),
                     corner = 8.dp,
+                    imageUrl = track.coverUrl,
                 )
                 Column(Modifier.weight(1f)) {
                     Text(

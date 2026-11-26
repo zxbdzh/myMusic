@@ -33,6 +33,8 @@ data class ChartSummary(
     val subtitle: String = "",
     val playCount: Long = 0L,
     val coverUrl: String = "",
+    /** 平台 id：详情页回源取数要带它（UI 只认 MusicCatalog，不认 :core 的 provider）。 */
+    val sourceId: String = "",
 )
 
 @Immutable
@@ -43,6 +45,8 @@ data class PlaylistSummary(
     val trackCount: Int = 0,
     val playCount: Long = 0L,
     val coverUrl: String = "",
+    /** 平台 id：打开歌单时回源取数用。 */
+    val sourceId: String = "",
 )
 
 @Immutable

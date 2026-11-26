@@ -68,9 +68,9 @@ class AppleHlsRewriteTest {
             assertTrue("缺 ENDLIST:\n$it", it.trimEnd().endsWith("#EXT-X-ENDLIST"))
         }
         // 段一个都不能丢
-        val total = out.split("\n").count { it.startsWith("https://") }
-        val kept = intro.split("\n").count { it.startsWith("https://") } +
-            split.main.split("\n").count { it.startsWith("https://") }
+        val total = out.lines().count { it.startsWith("https://") }
+        val kept = intro.lines().count { it.startsWith("https://") } +
+            split.main.lines().count { it.startsWith("https://") }
         assertEquals("切完段数变了", total, kept)
     }
 
@@ -91,8 +91,10 @@ class AppleHlsRewriteTest {
     @Test
     fun `relative segment and map uris are absolutized`() {
         val out = AppleHlsRewrite.rewrite(media, playlistUrl)
-        val outSegments = out.split("\n").filter { it.startsWith("https://") && it.endsWith(".mp4") }
-        val originalSegments = media.split("\n").filter { it.startsWith("P1516389482") }
+        // 用 lines() 按 CRLF/LF/CR 统一切行：Windows 上 core.autocrlf 会把三引号 fixture 检出成 CRLF，
+        // 直接用 split("\n") 会留下尾随 \r，让 endsWith(".mp4") 误判
+        val outSegments = out.lines().filter { it.startsWith("https://") && it.endsWith(".mp4") }
+        val originalSegments = media.lines().filter { it.startsWith("P1516389482") }
         assertEquals("段数量变了:\n$out", originalSegments.size, outSegments.size)
         outSegments.forEach { assertTrue("不是同目录的绝对地址: $it", it.startsWith(baseDir)) }
         // byterange 行原样保留
@@ -102,7 +104,7 @@ class AppleHlsRewriteTest {
     @Test
     fun `line count is unchanged`() {
         val out = AppleHlsRewrite.rewrite(media, playlistUrl)
-        assertEquals(media.split("\n").size, out.split("\n").size)
+        assertEquals(media.lines().size, out.lines().size)
     }
 
     @Test

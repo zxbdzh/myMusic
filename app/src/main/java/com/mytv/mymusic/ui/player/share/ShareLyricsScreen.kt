@@ -189,7 +189,11 @@ internal fun ShareOverlay(
     // 列表状态放在外面：从分享页回到选句层时还停在原来的位置；长按的那句落在上面三分之一
     val pickList = remember(session) { LazyListState((session.initial - 2).coerceAtLeast(0)) }
     BackHandler {
-        if (session.page == SharePage.Share) session.page = SharePage.Pick else onClose()
+        when (session.page) {
+            SharePage.Share -> session.page = SharePage.Pick
+            SharePage.Clip -> session.page = SharePage.Share
+            SharePage.Pick -> onClose()
+        }
     }
     // 选句层也按会话的种子色：选句时切了歌，列表还是这首歌的词，配色也不该跟着下一首变
     PlayerTheme(seed = session.seed) {
@@ -202,6 +206,12 @@ internal fun ShareOverlay(
             when (page) {
                 SharePage.Pick -> LyricPickLayer(session, pickList, active, currentKey, onClose) { session.page = SharePage.Share }
                 SharePage.Share -> ShareLyricsScreen(session, state.share, state.lyricStage, actions) { session.page = SharePage.Pick }
+                SharePage.Clip -> ShareClipEditorScreen(
+                    session = session,
+                    durationMs = session.song.duration.coerceAtLeast(0) * 1000L,
+                    onBack = { session.page = SharePage.Share },
+                    onConfirm = { session.page = SharePage.Share },
+                )
             }
         }
     }
@@ -282,7 +292,6 @@ private fun ShareLyricsScreen(
     var busy by remember { mutableStateOf<ShareAction?>(null) }
     val text = shareText(allRows, withSub, prefs.textFormat, song.title, song.artist, session.link)
     val publishState by remember { actions.sharePublishState() }.collectAsState()
-    var onlineMode by remember { mutableStateOf(com.mytv.mymusic.data.share.ShareMode.Full) }
     // 片段范围由选句推出（首句前、末句后各留 1 秒）；歌词没有时间戳时不可用
     val onlineClip = remember(session.lines, session.selected, session.synced, song.duration) {
         com.mytv.mymusic.data.share.shareClipRange(
@@ -375,8 +384,18 @@ private fun ShareLyricsScreen(
             onlineConfigured = prefs.serverUrl.isNotBlank(),
             onlineClipAvailable = onlineClip != null,
             onlineDuration = onlineDuration,
-            onlineMode = onlineMode,
-            onOnlineMode = { onlineMode = it },
+            onlineMode = session.onlineMode,
+            onOnlineMode = { mode ->
+                session.onlineMode = mode
+                // 刚切到片段：先按选句给一个范围，用户再进编辑页微调
+                if (mode == com.mytv.mymusic.data.share.ShareMode.Clip && session.clipEndMs <= session.clipStartMs) {
+                    onlineClip?.let {
+                        session.clipStartMs = it.startMs
+                        session.clipEndMs = it.endMs
+                    }
+                }
+            },
+            onAdjustClip = { session.page = SharePage.Clip },
             onPublish = {
                 actions.publishShare(
                     song = song,
@@ -389,8 +408,15 @@ private fun ShareLyricsScreen(
                     },
                     selectedIndexes = session.selected,
                     template = prefs.style,
-                    mode = onlineMode,
-                    clip = onlineClip,
+                    mode = session.onlineMode,
+                    // 片段模式用编辑页确认后的范围；没调过就用按选句算出的那个
+                    clip = when {
+                        session.onlineMode != com.mytv.mymusic.data.share.ShareMode.Clip -> null
+                        session.clipEndMs > session.clipStartMs ->
+                            com.mytv.mymusic.data.share.ShareClipRange(session.clipStartMs, session.clipEndMs)
+
+                        else -> onlineClip
+                    },
                 )
             },
             onCopyLink = { url ->
@@ -758,6 +784,7 @@ private fun ShareOptions(
     onlineDuration: String,
     onlineMode: com.mytv.mymusic.data.share.ShareMode,
     onOnlineMode: (com.mytv.mymusic.data.share.ShareMode) -> Unit,
+    onAdjustClip: () -> Unit,
     onPublish: () -> Unit,
     onCopyLink: (String) -> Unit,
 ) {
@@ -860,6 +887,7 @@ private fun ShareOptions(
             durationLabel = onlineDuration,
             mode = onlineMode,
             onMode = onOnlineMode,
+            onAdjustClip = onAdjustClip,
             onPublish = onPublish,
             onCopyLink = onCopyLink,
         )

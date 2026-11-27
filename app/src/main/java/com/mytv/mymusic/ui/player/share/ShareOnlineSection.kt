@@ -13,6 +13,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,6 +39,7 @@ internal fun ShareOnlineSection(
     durationLabel: String,
     mode: ShareMode,
     onMode: (ShareMode) -> Unit,
+    onAdjustClip: () -> Unit,
     onPublish: () -> Unit,
     onCopyLink: (String) -> Unit,
 ) {
@@ -89,8 +91,13 @@ internal fun ShareOnlineSection(
 
                 else -> {
                     Text(durationLabel, fontSize = 12.sp, color = scheme.onSurfaceVariant)
-                    Button(onClick = onPublish) {
-                        Text(if (publish.phase == SharePublishPhase.Idle) "生成听歌链接" else "重新生成听歌链接")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = onPublish) {
+                            Text(if (publish.phase == SharePublishPhase.Idle) "生成听歌链接" else "重新生成听歌链接")
+                        }
+                        if (mode == ShareMode.Clip) {
+                            TextButton(onClick = onAdjustClip) { Text("调整片段") }
+                        }
                     }
                 }
             }

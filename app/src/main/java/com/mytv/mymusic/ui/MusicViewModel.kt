@@ -7204,9 +7204,14 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 分享要用的取流地址：发布时下载它，片段编辑页试听也直接播它（不落盘）。 */
     suspend fun shareAudioUrl(song: Song): String {
-        val resolved = resolvePlayable(canonicalForSong(song), forDownload = true)
+        val track = canonicalForSong(song)
+        val resolved = resolvePlayable(track, forDownload = true)
         val ready = resolved.resolution as? Resolution.Ready
-        if (ready == null || ready.url.isBlank()) error("没有可分享的音频地址")
+        // 取不到时把解析器的原因带出来：只写「没有地址」用户和排查都没法往下走
+        if (ready == null || ready.url.isBlank()) {
+            val reason = runCatching { noSourceMessage(track, resolved.resolution) }.getOrNull()
+            error(listOfNotNull("没有可分享的音频地址", reason?.takeIf { it.isNotBlank() }).joinToString("："))
+        }
         return if (ready.source.providerId.startsWith(com.mytv.mymusic.data.subsonic.SUBSONIC_PROVIDER_PREFIX)) {
             app.repository.downloadUrl(ready.source.song, cookieFor(ready.source.providerId))
         } else {

@@ -6746,8 +6746,42 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         message("已开始上传「${song.title}」，可以离开这一页")
     }
 
-    /** 跟着后台任务更新分享页的状态：成功回传链接，失败给原因，重试由用户点。 */
-    private fun observeSharePublish(context: Application, idempotencyKey: String) {
+    private val _shareList = MutableStateFlow(com.mytv.mymusic.data.share.ShareListUi())
+
+    /** 「我的分享」列表：服务端是唯一事实来源，进设置页或点刷新时读一次。 */
+    val shareList: StateFlow<com.mytv.mymusic.data.share.ShareListUi> = _shareList
+
+    fun loadShares() = viewModelScope.launch {
+        val origin = com.mytv.mymusic.data.share.normalizeShareServerUrl(base.value.share.serverUrl)
+        if (origin == null) {
+            _shareList.value = com.mytv.mymusic.data.share.ShareListUi(error = "还没有配置分享服务地址")
+            return@launch
+        }
+        val token = app.secretStore.secret(com.mytv.mymusic.data.share.shareTokenName(origin)).orEmpty()
+        if (token.isBlank()) {
+            _shareList.value = com.mytv.mymusic.data.share.ShareListUi(error = "还没有保存分享服务令牌")
+            return@launch
+        }
+        _shareList.value = _shareList.value.copy(loading = true, error = "")
+        val result = runCatching {
+            com.mytv.mymusic.data.share.ShareServiceClient(origin, token, http).list()
+        }
+        _shareList.value = result.fold(
+            onSuccess = { com.mytv.mymusic.data.share.ShareListUi(items = it) },
+            onFailure = { com.mytv.mymusic.data.share.ShareListUi(error = it.message ?: "读取分享列表失败") },
+        )
+    }
+
+    fun revokeShare(id: String) = viewModelScope.launch {
+        val origin = com.mytv.mymusic.data.share.normalizeShareServerUrl(base.value.share.serverUrl) ?: return@launch
+        val token = app.secretStore.secret(com.mytv.mymusic.data.share.shareTokenName(origin)).orEmpty()
+        if (token.isBlank() || id.isBlank()) return@launch
+        runCatching { com.mytv.mymusic.data.share.ShareServiceClient(origin, token, http).revoke(id) }
+            .onFailure { message(it.message ?: "撤销失败", error = true) }
+        loadShares()
+    }
+
+    /** 跟着后台任务更新分享页的状态：成功回传链接，失败给原因，重试由用户点。 */    private fun observeSharePublish(context: Application, idempotencyKey: String) {
         sharePublishJob?.cancel()
         sharePublishJob = viewModelScope.launch {
             val manager = BackgroundWork.get(context) ?: return@launch

@@ -110,7 +110,7 @@ internal val ShareCardStyle.serviceTemplate: String
     }
 
 /** 服务端返回的分享状态与界面用词。顺序照桌面版的「我的分享」，未知状态按原样显示。 */
-internal enum class ShareState(val wire: String, val label: String) {
+enum class ShareState(val wire: String, val label: String) {
     AwaitingUpload("awaiting_upload", "等待音频"),
     Uploading("uploading", "上传中"),
     Processing("processing", "准备中"),
@@ -146,7 +146,7 @@ internal data class ShareResult(
 
 /** 「我的分享」列表项。服务端按状态省略部分字段，缺省都算空。 */
 @Serializable
-internal data class ShareListItem(
+data class ShareListItem(
     val id: String = "",
     val title: String = "",
     val artists: String = "",
@@ -189,3 +189,10 @@ internal fun newShareIdempotencyKey(): String {
     java.security.SecureRandom().nextBytes(bytes)
     return bytes.joinToString("") { "%02x".format(it) }
 }
+
+/** 「我的分享」列表的界面状态：加载中、错误、条目。 */
+data class ShareListUi(
+    val loading: Boolean = false,
+    val error: String = "",
+    val items: List<ShareListItem> = emptyList(),
+)

@@ -1,5 +1,16 @@
 package com.mytv.mymusic.ui.settings
 
+import android.content.ClipData
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import com.mytv.mymusic.data.share.ShareListItem
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -44,6 +55,8 @@ internal fun OnlineSharingSettingsScreen(
     embedded: Boolean,
 ) {
     val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboard.current
+    val listState by remember { actions.shareListState() }.collectAsState()
     val shape = RoundedCornerShape(20.dp)
     val savedUrl = state.share.serverUrl
 
@@ -57,6 +70,7 @@ internal fun OnlineSharingSettingsScreen(
     LaunchedEffect(savedUrl) {
         tokenSaved = actions.hasShareToken()
         tokenStatus = ""
+        actions.loadShares()
     }
 
     SettingsPage(SettingsSection.Sharing, embedded, onBack) {
@@ -171,6 +185,77 @@ internal fun OnlineSharingSettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
+
+        item(key = "shares-head") {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 18.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("我的分享", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = { actions.loadShares() }) { Text("刷新") }
+            }
+        }
+
+        when {
+            listState.loading -> item(key = "shares-loading") {
+                SettingsNote("正在读取…")
+            }
+
+            listState.error.isNotBlank() -> item(key = "shares-error") {
+                SettingsNote(listState.error)
+            }
+
+            listState.items.isEmpty() -> item(key = "shares-empty") {
+                SettingsNote("还没有在线分享。分享卡片生成听歌链接后，这里就能看到。")
+            }
+
+            else -> items(listState.items, key = { it.id }) { item ->
+                ShareListRow(
+                    item = item,
+                    onCopy = { url ->
+                        scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("听歌链接", url))) }
+                    },
+                    onRevoke = { actions.revokeShare(item.id) },
+                )
+            }
+        }
+    }
+}
+
+/** 「我的分享」一行：歌名 · 歌手 + 状态词，右侧复制链接 / 撤销。 */
+@Composable
+private fun ShareListRow(
+    item: ShareListItem,
+    onCopy: (String) -> Unit,
+    onRevoke: () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                item.title.ifBlank { "未命名分享" },
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+            )
+            Text(
+                item.detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = scheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
+        if (item.url.isNotBlank()) {
+            TextButton(onClick = { onCopy(item.url) }) { Text("复制链接") }
+        }
+        // 已撤销 / 已过期不再提供撤销
+        if (item.state?.canRevoke == true) {
+            TextButton(onClick = onRevoke) { Text("撤销", color = scheme.error) }
         }
     }
 }

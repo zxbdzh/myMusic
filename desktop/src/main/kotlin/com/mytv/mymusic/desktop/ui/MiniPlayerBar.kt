@@ -22,21 +22,25 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.mytv.mymusic.desktop.state.MusicStore
 import com.mytv.mymusic.desktop.state.MusicUiState
 import com.mytv.mymusic.desktop.state.formatTime
 import com.mytv.mymusic.desktop.ui.components.AppIcon
 import com.mytv.mymusic.desktop.ui.components.CoverArt
+import com.mytv.mymusic.desktop.ui.components.PcSeekBar
+import com.mytv.mymusic.desktop.ui.components.PcVolumeBar
 import com.mytv.mymusic.desktop.ui.components.PlayPauseButton
 import com.mytv.mymusic.desktop.ui.components.RoundIconButton
-import com.mytv.mymusic.desktop.ui.components.WavyProgressBar
 
 /**
- * 迷你播放条（对应 Android 平板的 `BottomPlayerBar` + 手机 `MiniPlayer`）。
+ * 迷你播放条（窄窗口 <1200dp 时出现）。
  *
- * 桌面常驻在内容区下方、导航栏右侧：左封面与曲目、中间走带与进度、右音量与入口。
+ * PC 版的密度：整条 56dp（原来照抄平板的 86dp，占了太多竖向空间）、封面 40dp、
+ * 标题 13sp / 歌手 11sp。中间只留走带 + 一条细进度（PC 上进度条本来就该细），
+ * 右侧音量 / 队列 / 全屏三件套。
+ *
  * 没在播放时也不隐藏——给一句"挑一首开始"，否则窗口底部会莫名空出一块。
- * 进度用同一套波浪样式，和播放页保持连续感。
  */
 @Composable
 fun MiniPlayerBar(state: MusicUiState, store: MusicStore) {
@@ -44,31 +48,33 @@ fun MiniPlayerBar(state: MusicUiState, store: MusicStore) {
     Row(
         Modifier
             .fillMaxWidth()
-            .height(86.dp)
+            .height(56.dp)
             .background(MaterialTheme.colorScheme.surfaceContainer)
-            .padding(horizontal = 20.dp),
+            .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(18.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        // 左：封面 40dp + 两行文字（11sp / 13sp）
         Row(
-            Modifier.width(300.dp),
+            Modifier.width(240.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             if (track != null) {
                 CoverArt(
                     seedKey = track.id,
                     label = track.title,
                     modifier = Modifier
-                        .size(52.dp)
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(8.dp))
                         .clickable(onClick = store::openPlayer),
-                    corner = 12.dp,
+                    corner = 8.dp,
                     imageUrl = track.coverUrl,
                 )
                 Column(Modifier.weight(1f)) {
                     Text(
                         text = track.title,
-                        style = MaterialTheme.typography.bodyLarge,
+                        fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
@@ -76,7 +82,7 @@ fun MiniPlayerBar(state: MusicUiState, store: MusicStore) {
                     )
                     Text(
                         text = "${track.artist} · ${track.providerName}",
-                        style = MaterialTheme.typography.bodySmall,
+                        fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -85,68 +91,68 @@ fun MiniPlayerBar(state: MusicUiState, store: MusicStore) {
             } else {
                 Box(
                     Modifier
-                        .size(52.dp)
-                        .clip(RoundedCornerShape(12.dp))
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(8.dp))
                         .background(MaterialTheme.colorScheme.surfaceContainerHighest),
                 )
                 Column(Modifier.weight(1f)) {
                     Text(
                         text = "没有正在播放",
-                        style = MaterialTheme.typography.bodyMedium,
+                        fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Text(
                         text = "在榜单或搜索里挑一首",
-                        style = MaterialTheme.typography.labelSmall,
+                        fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.outline,
                     )
                 }
             }
         }
 
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                RoundIconButton(AppIcon.Previous, "上一首", store::previous, size = 34.dp)
-                Spacer(Modifier.width(6.dp))
-                PlayPauseButton(playing = state.playing, onClick = store::togglePlay, size = 38.dp)
-                Spacer(Modifier.width(6.dp))
-                RoundIconButton(AppIcon.Next, "下一首", store::next, size = 34.dp)
-            }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = formatTime(state.positionMs),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.width(42.dp),
-                )
-                WavyProgressBar(
-                    progress = if (state.durationMs > 0) state.positionMs.toFloat() / state.durationMs else 0f,
-                    playing = state.playing,
-                    onSeekFraction = { fraction -> store.seekTo((fraction * state.durationMs).toLong()) },
-                    modifier = Modifier.weight(1f),
-                    height = 16.dp,
-                )
-                Text(
-                    text = formatTime(state.durationMs),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.width(42.dp),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.End,
-                )
-            }
-        }
-
+        // 中：走带 + 进度
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            RoundIconButton(AppIcon.Volume, "音量", { store.setVolume(if (state.volume > 0f) 0f else 0.8f) }, size = 36.dp)
-            RoundIconButton(AppIcon.Grid, "海报墙", store::openPosterWall, size = 36.dp)
-            RoundIconButton(AppIcon.Fullscreen, "全屏歌词", store::openLyrics, size = 36.dp)
+            RoundIconButton(AppIcon.Previous, "上一首", store::previous, size = 28.dp)
+            PlayPauseButton(playing = state.playing, onClick = store::togglePlay, size = 32.dp)
+            RoundIconButton(AppIcon.Next, "下一首", store::next, size = 28.dp)
+        }
+        Text(
+            text = formatTime(state.positionMs),
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(38.dp),
+        )
+        PcSeekBar(
+            progress = if (state.durationMs > 0) state.positionMs.toFloat() / state.durationMs else 0f,
+            onSeekFraction = { fraction -> store.seekTo((fraction * state.durationMs).toLong()) },
+            bubble = { fraction -> formatTime((fraction * state.durationMs).toLong()) },
+            modifier = Modifier.weight(1f),
+            barHeight = 4.dp,
+        )
+        Text(
+            text = formatTime(state.durationMs),
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(38.dp),
+        )
+
+        // 右：音量 + 队列 + 全屏
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            val muted = state.volume <= 0.001f
+            RoundIconButton(
+                AppIcon.Volume,
+                if (muted) "取消静音" else "静音",
+                { store.setVolume(if (muted) 0.8f else 0f) },
+                size = 28.dp,
+                tint = if (muted) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.onSurfaceVariant,
+                selected = muted,
+            )
+            PcVolumeBar(value = state.volume, onValueChange = store::setVolume, width = 72.dp)
+            RoundIconButton(AppIcon.Grid, "海报墙（队列）", store::openPosterWall, size = 28.dp)
+            RoundIconButton(AppIcon.Fullscreen, "全屏歌词", store::openLyrics, size = 28.dp)
         }
     }
 }

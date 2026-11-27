@@ -101,6 +101,7 @@ data class LibraryStats(
 data class LibraryPayload(
     val favorites: List<Track> = emptyList(),
     val history: List<Track> = emptyList(),
+    val localTracks: List<Track> = emptyList(),
     val playlists: List<PlaylistSummary> = emptyList(),
     val stats: LibraryStats = LibraryStats(),
 )
@@ -163,6 +164,7 @@ data class LibraryUiState(
     val playlists: List<PlaylistSummary> = emptyList(),
     val favorites: List<Track> = emptyList(),
     val history: List<Track> = emptyList(),
+    val localTracks: List<Track> = emptyList(),
     val stats: LibraryStats = LibraryStats(),
     val error: String = "",
 )

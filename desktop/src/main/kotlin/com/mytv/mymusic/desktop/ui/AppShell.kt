@@ -101,7 +101,9 @@ fun AppShell(store: MusicStore) {
                         Box(Modifier.weight(1f).fillMaxHeight()) {
                             RouteBody(state = state, store = store)
                         }
-                        if (allowRightDrawer) {
+                        if (state.comments.open) {
+                            CommentsDrawer(comments = state.comments, store = store)
+                        } else if (allowRightDrawer) {
                             NowPlayingPane(state = state, store = store)
                         }
                     }

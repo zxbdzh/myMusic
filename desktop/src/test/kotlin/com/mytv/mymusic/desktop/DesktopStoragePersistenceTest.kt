@@ -136,4 +136,42 @@ class DesktopStoragePersistenceTest {
             root.deleteRecursively()
         }
     }
+
+    @Test
+    fun `local music folder scan persists tracks and resolves file stream and lrc`() = runBlocking {
+        val root = tempRoot("local-scan")
+        try {
+            val musicDir = File(root, "Music/专辑一").apply { mkdirs() }
+            val audioFile = File(musicDir, "周杰伦 - 稻香.flac").apply { writeBytes(ByteArray(2048) { it.toByte() }) }
+            File(musicDir, "周杰伦 - 稻香.lrc").writeText("[00:01.00]对这个世界如果你有太多的抱怨\n", Charsets.UTF_8)
+            File(musicDir, "readme.txt").writeText("ignored", Charsets.UTF_8)
+
+            val paths = DesktopPaths(overrideRoot = File(root, "app"))
+            val catalog = CoreMusicCatalog(paths)
+            try {
+                val count = catalog.scanLocalFolder(File(root, "Music"))
+                assertEquals(1, count)
+
+                val lib = catalog.library()
+                assertEquals(1, lib.localTracks.size)
+                val track = lib.localTracks.first()
+                assertEquals("稻香", track.title)
+                assertEquals("周杰伦", track.artist)
+                assertEquals("本地音乐", track.providerName)
+
+                val stream = catalog.stream(track)
+                assertNotNull(stream)
+                assertTrue(stream!!.url.startsWith("file:/"))
+                assertEquals("flac", stream.ext)
+
+                val lrc = catalog.lyrics(track)
+                assertTrue(lrc.contains("对这个世界如果你有太多的抱怨"))
+                assertTrue(audioFile.isFile)
+            } finally {
+                catalog.close()
+            }
+        } finally {
+            root.deleteRecursively()
+        }
+    }
 }

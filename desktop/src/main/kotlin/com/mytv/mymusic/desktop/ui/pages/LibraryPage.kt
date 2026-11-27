@@ -71,9 +71,13 @@ import com.mytv.mymusic.desktop.ui.components.SkeletonRow
  */
 @Composable
 fun LibraryPage(state: MusicUiState, store: MusicStore) {
+    if (state.collection.open) {
+        CollectionPage(state, store)
+        return
+    }
     val library = state.library
-    // 折叠状态：默认展开"喜欢"和"最近播放"，这两个 BF3 就有数据
-    var collapsed by remember { mutableStateOf(setOf("下载", "自建歌单")) }
+    // 默认展开喜欢、最近播放、本地音乐与自建歌单，让曲库内容一屏直观可见
+    var collapsed by remember { mutableStateOf(emptySet<String>()) }
     val selection = remember { RowSelection() }
     val listState = rememberLazyListState()
 
@@ -85,7 +89,8 @@ fun LibraryPage(state: MusicUiState, store: MusicStore) {
             verticalArrangement = Arrangement.spacedBy(Metrics.gapSmall),
         ) {
         item {
-            PcPageHeader(title = "我的", subtitle = "收藏、历史与自建歌单") {
+            PcPageHeader(title = "我的", subtitle = "收藏、历史、本地音乐与自建歌单（Room 持久化）") {
+                PcActionButton("扫描本地文件夹", AppIcon.Library, { pickFolderAndScan(store) })
                 PcActionButton("海报墙", AppIcon.Grid, store::openPosterWall)
                 PcActionButton("设置", AppIcon.Settings, { store.navigate(Route.Settings) })
             }
@@ -154,17 +159,32 @@ fun LibraryPage(state: MusicUiState, store: MusicStore) {
             }
         }
 
-        // ---- 下载（本地库待接线）----
+        // ---- 本地音乐（Room local_tracks）----
         item {
             GroupHeader(
-                title = "下载",
-                count = library.stats.localTracks,
-                open = "下载" !in collapsed,
-                onToggle = { collapsed = collapsed.toggle("下载") },
+                title = "本地音乐",
+                count = library.localTracks.size,
+                open = "本地音乐" !in collapsed,
+                onToggle = { collapsed = collapsed.toggle("本地音乐") },
             )
         }
-        if ("下载" !in collapsed) {
-            item { EmptyGroupHint("本地音乐库（Room）在 t2b 之后接入；现在这一组只有数量。") }
+        if ("本地音乐" !in collapsed) {
+            if (library.localTracks.isEmpty()) {
+                item { EmptyGroupHint("还没有扫描本地音乐。点击右上角「扫描本地文件夹」即可导入 MP3 / FLAC / WAV 等文件。") }
+            } else {
+                items(library.localTracks.size) { index ->
+                    val track = library.localTracks[index]
+                    LibraryTrackRow(
+                        index = index,
+                        track = track,
+                        allIds = library.localTracks.map { it.id },
+                        selection = selection,
+                        state = state,
+                        store = store,
+                        queue = library.localTracks,
+                    )
+                }
+            }
         }
 
         // ---- 自建歌单 ----
@@ -178,7 +198,7 @@ fun LibraryPage(state: MusicUiState, store: MusicStore) {
         }
         if ("自建歌单" !in collapsed) {
             if (library.playlists.isEmpty()) {
-                item { EmptyGroupHint("还没有自建歌单。歌单 CRUD 依赖本地库，排在 t2b 之后。") }
+                item { EmptyGroupHint("还没有自建歌单。在左侧边栏点「+」新建，或右键任意歌曲加入歌单。") }
             } else {
                 items(library.playlists.size) { index ->
                     LocalPlaylistRow(
@@ -319,6 +339,20 @@ private fun LocalPlaylistRow(playlist: PlaylistSummary, onOpen: () -> Unit) {
             fontSize = Metrics.caption,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+/** 弹出目录选择器扫描本地音乐，放在 Swing EDT 执行避免卡住 Compose 渲染线程。 */
+private fun pickFolderAndScan(store: MusicStore) {
+    javax.swing.SwingUtilities.invokeLater {
+        val chooser = javax.swing.JFileChooser().apply {
+            dialogTitle = "选择要扫描的本地音乐文件夹"
+            fileSelectionMode = javax.swing.JFileChooser.DIRECTORIES_ONLY
+            isAcceptAllFileFilterUsed = false
+        }
+        if (chooser.showOpenDialog(null) == javax.swing.JFileChooser.APPROVE_OPTION) {
+            chooser.selectedFile?.let(store::scanLocalFolder)
+        }
     }
 }
 

@@ -627,6 +627,20 @@ class DefaultMusicStore(
         }
     }
 
+    override fun scanLocalFolder(folder: java.io.File) {
+        scope.launch {
+            _state.update { it.copy(notice = "正在扫描本地目录：${folder.name}...") }
+            val count = runCatching { catalog.scanLocalFolder(folder) }.getOrDefault(0)
+            val loaded = libraryUseCase.load()
+            _state.update {
+                it.copy(
+                    library = loaded,
+                    notice = if (count > 0) "已导入 $count 首本地音乐" else "未在该目录找到支持的音频文件",
+                )
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- 平台凭据（DPAPI）
 
     override fun getProviderCookie(providerId: String): String = catalog.getCookie(providerId)

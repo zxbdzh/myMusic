@@ -334,6 +334,7 @@ fun trackMenuActions(state: MusicUiState, store: MusicStore, track: Track): List
             store.updateQuery(track.artist)
             store.submitSearch(track.artist)
         },
+        ContextAction("查看评论") { store.openComments(track) },
         ContextAction(if (liked) "取消喜欢" else "喜欢") { store.toggleFavorite(track) },
         ContextAction("复制链接") { copyToClipboard("${track.providerId}:${track.id}") },
     )

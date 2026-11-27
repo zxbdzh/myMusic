@@ -86,6 +86,9 @@ interface MusicCatalog {
 
     suspend fun userPlaylistTracks(playlistId: String): List<Track> = emptyList()
 
+    /** 扫描本地音频文件夹写入 Room `local_tracks`，返回新增/更新曲目数。 */
+    suspend fun scanLocalFolder(folder: java.io.File): Int = 0
+
     // ---- 平台凭据（DPAPI 加密落盘） ----
 
     fun getCookie(providerId: String): String = ""

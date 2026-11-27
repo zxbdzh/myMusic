@@ -127,6 +127,7 @@ class LibraryUseCase(private val catalog: MusicCatalog) {
             LibraryUiState(
                 favorites = payload.favorites,
                 history = payload.history,
+                localTracks = payload.localTracks,
                 playlists = payload.playlists,
                 stats = payload.stats,
             )

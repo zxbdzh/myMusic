@@ -250,10 +250,27 @@ class CoreMusicCatalog(
         val favRows = runCatching { db.dao().songsOnce(FAVORITE_BUCKET) }.getOrDefault(emptyList())
         val histRows = runCatching { db.dao().songsOnce(HISTORY_BUCKET) }.getOrDefault(emptyList())
         val playlistEntities = runCatching { db.library().playlistsOnce() }.getOrDefault(emptyList())
-        val localCount = runCatching { db.localTracks().all().count { !it.missing } }.getOrDefault(0)
+        val localEntities = runCatching { db.localTracks().all().filterNot { it.missing } }.getOrDefault(emptyList())
 
         val favTracks = favRows.mapNotNull { decodeSong(it.payload)?.toUi(defaultProviderId) }
         val histTracks = histRows.take(100).mapNotNull { decodeSong(it.payload)?.toUi(defaultProviderId) }
+        val localTracks = localEntities.map { entity ->
+            val song = Song(
+                id = entity.localId,
+                name = entity.title,
+                artist = entity.artist,
+                album = entity.album,
+                duration = entity.durationSec,
+                source = com.mytv.mymusic.data.local.LOCAL_SOURCE,
+                url = entity.uri,
+                ext = entity.extension,
+                extra = buildMap {
+                    put("data_path", entity.dataPath)
+                    if (entity.lrcUri.isNotBlank()) put("lrc_uri", entity.lrcUri)
+                },
+            )
+            song.toUi(com.mytv.mymusic.data.local.LOCAL_SOURCE).copy(providerName = "本地音乐")
+        }
         val userPlaylists = playlistEntities.map { entity ->
             val entries = runCatching { db.library().entriesOnce(entity.id) }.getOrDefault(emptyList())
             val firstCover = entity.linkCover.ifBlank {
@@ -271,12 +288,13 @@ class CoreMusicCatalog(
         LibraryPayload(
             favorites = favTracks,
             history = histTracks,
+            localTracks = localTracks,
             playlists = userPlaylists,
             stats = LibraryStats(
                 favorites = favTracks.size,
                 history = histTracks.size,
                 playlists = userPlaylists.size,
-                localTracks = localCount,
+                localTracks = localTracks.size,
             ),
         )
     }
@@ -393,19 +411,48 @@ class CoreMusicCatalog(
         }.getOrDefault(emptyList())
     }
 
+    override suspend fun scanLocalFolder(folder: java.io.File): Int = withContext(Dispatchers.IO) {
+        val scanned = LocalMusicScanner.scanFolder(folder)
+        if (scanned.isEmpty()) return@withContext 0
+        runCatching { db.localTracks().upsert(scanned) }.getOrNull() ?: return@withContext 0
+        scanned.size
+    }
+
     override suspend fun lyrics(track: Track): String {
         val song = resolveSong(track)
+        if (song.source == com.mytv.mymusic.data.local.LOCAL_SOURCE) {
+            val lrcPath = song.extra["lrc_uri"].orEmpty()
+            if (lrcPath.isNotBlank()) {
+                val file = java.io.File(lrcPath)
+                if (file.isFile) return runCatching { file.readText(Charsets.UTF_8) }.getOrDefault("")
+            }
+            return ""
+        }
         return guarded("歌词") { repository.lyrics(song, getCookie(song.source)) }.orEmpty()
     }
 
     /**
-     * 取可播放流（带自动跨平台换源兜底）：
-     * 1. 先向原平台请求 `playableStream`（保留真实音质、是否试听及附加信息）；
+     * 取可播放流（带本地文件直出 + 自动跨平台换源兜底）：
+     * 0. 本地音乐直接返回 `file:///` URI 交给 libVLC 本地解码；
+     * 1. 在线曲目先向原平台请求 `playableStream`（保留真实音质、是否试听及附加信息）；
      * 2. 若原平台取流为空、失败或仅给 30s 试听片段，则在备选可用平台并发搜索同名同歌手曲目并取流；
      * 3. 备选全部无完整流但原平台有试听流时，退回试听流并注明。
      */
     override suspend fun stream(track: Track): AudioStream? {
         val song = resolveSong(track)
+        if (song.source == com.mytv.mymusic.data.local.LOCAL_SOURCE) {
+            val path = song.extra["data_path"].orEmpty()
+            val url = when {
+                path.isNotBlank() && java.io.File(path).isFile -> java.io.File(path).toURI().toString()
+                song.url.isNotBlank() -> song.url
+                else -> return null
+            }
+            return AudioStream(
+                url = url,
+                ext = song.ext.ifBlank { extensionOf(url) },
+                note = "本地文件",
+            )
+        }
         val primary = resolveDirectStream(song)
         if (primary != null && !primary.preview) {
             return primary.toAudioStream(song, switched = false)

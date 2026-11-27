@@ -174,6 +174,9 @@ interface MusicStore {
     fun addTrackToDefaultPlaylist(track: Track) = Unit
     fun removeTrackFromPlaylist(playlistId: String, trackId: String) = Unit
 
+    // ---- 本地音乐扫描（Room local_tracks） ----
+    fun scanLocalFolder(folder: java.io.File) = Unit
+
     // ---- 平台凭据（DPAPI 加密落盘） ----
     fun getProviderCookie(providerId: String): String = ""
     fun setProviderCookie(providerId: String, cookie: String) = Unit

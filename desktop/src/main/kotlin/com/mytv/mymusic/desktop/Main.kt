@@ -56,6 +56,10 @@ import java.io.File
  * 所以"搜歌时打空格"不会触发暂停；Esc 只在覆盖层打开时响应。
  */
 fun main(args: Array<String>) {
+    // 随包 libVLC：jpackage 把 resources/vlc 放到 app 目录旁，JNA 只读一次 jna.library.path，
+    // 所以必须在任何 vlcj 调用之前设置（见 VlcInstallation）
+    val bundledVlc = com.mytv.mymusic.desktop.state.audio.VlcInstallation.applyBundledRuntime()
+    if (bundledVlc != null) System.err.println("[vlc] 随包运行库：${bundledVlc.absolutePath}")
     screenshotTarget(args)?.let { dir ->
         ScreenshotRunner.run(File(dir))
         return

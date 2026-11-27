@@ -1,5 +1,11 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+// 注意：Gradle Kotlin DSL 里的 `java` 是 JavaPluginExtension，写 `java.net.URI` 会被解析成扩展成员，
+// 所以 JDK 类型一律走 import
+import java.net.URI
+import java.security.MessageDigest
+import java.time.OffsetDateTime
+import java.util.zip.ZipInputStream
 
 // :desktop —— Compose Multiplatform Desktop 的 Windows 桌面壳。
 // 只做窗口与进程生命周期，业务全部在 :core / :playback-core / :playback-vlc。
@@ -114,6 +120,167 @@ val stageSmtcBridge by tasks.registering(Copy::class) {
     dependsOn(buildSmtcBridge)
 }
 
+// ---------------------------------------------------------------------------
+// 版本号（t8）
+//
+// jpackage 只认 1.1.0 这种纯数字段；CI 用 PC_VERSION=1.1.<run_number> 注入构建号。
+// MSI 的升级判定依赖版本递增，同版本重装会被拒绝，所以发布任务必须带新版本号。
+// 本地不设环境变量时固定 1.1.0，保证复现与文档一致。
+// ---------------------------------------------------------------------------
+val pcVersion: String = providers.environmentVariable("PC_VERSION").orElse("1.1.0").get()
+
+// ---------------------------------------------------------------------------
+// 随包 libVLC（t8）
+//
+// jpackage 的 app-image 只带 JRE，不带 libvlc；用户机器不该被迫自装 VLC。
+// 这里在打包前把 VLC 发行包里的播放必需子集抽到 appResourcesRootDir：
+//   libvlc.dll / libvlccore.dll / plugins/ / lua/
+// 运行时由 VlcOptions 按 `compose.application.resources.dir/vlc` 发现（见 VlcAudioOutput）。
+//
+// 下载源可用 -PpcVlcZip=<本地 zip> 覆盖（内网/离线构建），默认走清华镜像；
+// build/vlc-runtime 已存在时整个任务跳过，重复打包不会重复解压 77 MB。
+// ---------------------------------------------------------------------------
+val vlcVersion: String = providers.gradleProperty("pcVlcVersion").orElse("3.0.21").get()
+val vlcRuntimeDir = layout.buildDirectory.dir("vlc-runtime")
+
+val fetchVlcRuntime by tasks.registering {
+    group = "windows"
+    description = "准备随包 libVLC 运行库（libvlc.dll + plugins/ + lua/）"
+    outputs.dir(vlcRuntimeDir)
+    doLast {
+        val outDir = vlcRuntimeDir.get().asFile
+        if (File(outDir, "libvlc.dll").isFile) {
+            logger.lifecycle("[vlc] 运行库已就绪，跳过：${outDir.absolutePath}")
+            return@doLast
+        }
+        // 本地 zip 优先（离线构建）；否则用缓存 zip，再否则从镜像下载
+        val localZip = providers.gradleProperty("pcVlcZip").orNull?.let { file(it) }
+        val cachedZip = layout.buildDirectory.file("vlc/vlc-$vlcVersion-win64.zip").get().asFile
+        val zip = when {
+            localZip != null && localZip.isFile -> localZip
+            cachedZip.isFile && cachedZip.length() > 10_000_000L -> cachedZip
+            else -> {
+                val mirrors = listOf(
+                    "https://mirrors.tuna.tsinghua.edu.cn/videolan-ftp/vlc/$vlcVersion/win64/vlc-$vlcVersion-win64.zip",
+                    "https://download.videolan.org/pub/videolan/vlc/$vlcVersion/win64/vlc-$vlcVersion-win64.zip",
+                )
+                cachedZip.parentFile.mkdirs()
+                var lastError: Exception? = null
+                for (url in mirrors) {
+                    try {
+                        logger.lifecycle("[vlc] 下载 $url")
+                        URI(url).toURL().openStream().use { input ->
+                            cachedZip.outputStream().use { input.copyTo(it) }
+                        }
+                        if (cachedZip.length() > 10_000_000L) break
+                    } catch (error: Exception) {
+                        lastError = error
+                        logger.warn("[vlc] 镜像失败：$url（${error.message}）")
+                    }
+                }
+                if (cachedZip.length() <= 10_000_000L) {
+                    throw GradleException(
+                        "libVLC 运行库下载失败（${lastError?.message}）。" +
+                            "可手工下载 vlc-$vlcVersion-win64.zip 后加 -PpcVlcZip=<路径> 重跑。",
+                    )
+                }
+                cachedZip
+            }
+        }
+        logger.lifecycle("[vlc] 解压播放子集：${zip.absolutePath}")
+        outDir.mkdirs()
+        ZipInputStream(zip.inputStream().buffered()).use { zis ->
+            var entry = zis.nextEntry
+            while (entry != null) {
+                // 发行包里所有文件都在 vlc-<version>/ 顶层目录下，去掉这一层
+                val rel = entry.name.substringAfter("vlc-$vlcVersion/", entry.name)
+                val keep = rel == "libvlc.dll" || rel == "libvlccore.dll" ||
+                    rel.startsWith("plugins/") || rel.startsWith("lua/")
+                if (keep && !entry.isDirectory) {
+                    val target = File(outDir, rel.replace('/', File.separatorChar))
+                    target.parentFile.mkdirs()
+                    target.outputStream().use { zis.copyTo(it) }
+                }
+                zis.closeEntry()
+                entry = zis.nextEntry
+            }
+        }
+        val dll = File(outDir, "libvlc.dll")
+        if (!dll.isFile) throw GradleException("解压后没有 libvlc.dll：${outDir.absolutePath}")
+        logger.lifecycle("[vlc] 完成：${outDir.absolutePath}（${File(outDir, "plugins").listFiles()?.size ?: 0} 个插件目录）")
+    }
+}
+
+val stageVlcRuntime by tasks.registering(Copy::class) {
+    group = "windows"
+    description = "把 libVLC 运行库放进 jpackage 的 app 资源目录"
+    from(vlcRuntimeDir)
+    into(layout.buildDirectory.dir("windowsAppResources/vlc"))
+    dependsOn(fetchVlcRuntime)
+}
+
+// ---------------------------------------------------------------------------
+// 构建信息与校验和（t8）
+//
+// 产物版本、JDK、libVLC 版本一起写进 build/pc-build-info.txt；发布时把
+// exe / msi / app-image 的 SHA-256 落到 build/pc-checksums.txt，同时打印到日志。
+// CI 会再算一遍并作为 artifact 上传，文档里记录的就是这两份值。
+// ---------------------------------------------------------------------------
+val pcBuildInfo by tasks.registering {
+    group = "windows"
+    description = "记录本次打包的版本 / JDK / libVLC 信息"
+    val info = layout.buildDirectory.file("pc-build-info.txt")
+    outputs.file(info)
+    doLast {
+        val text = buildString {
+            appendLine("appVersion=$pcVersion")
+            appendLine("jdk=${System.getProperty("java.version")} (${System.getProperty("java.home")})")
+            appendLine("libVlc=$vlcVersion")
+            appendLine("builtAt=${OffsetDateTime.now()}")
+        }
+        info.get().asFile.writeText(text)
+        logger.lifecycle("[pack] 构建信息：\n$text")
+    }
+}
+
+val pcChecksums by tasks.registering {
+    group = "windows"
+    description = "计算安装包与 app-image 的 SHA-256（build/pc-checksums.txt）"
+    val binaries = layout.buildDirectory.dir("compose/binaries/main")
+    val out = layout.buildDirectory.file("pc-checksums.txt")
+    outputs.file(out)
+    doLast {
+        val root = binaries.get().asFile
+        fun sha256(file: File): String {
+            val digest = MessageDigest.getInstance("SHA-256")
+            file.inputStream().buffered().use { input ->
+                val buffer = ByteArray(1 shl 16)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read <= 0) break
+                    digest.update(buffer, 0, read)
+                }
+            }
+            return digest.digest().joinToString("") { "%02x".format(it) }
+        }
+
+        val lines = mutableListOf<String>()
+        listOf("exe", "msi").forEach { folder ->
+            val dir = File(root, folder)
+            dir.listFiles { f -> f.isFile }?.sortedBy { it.name }?.forEach { file ->
+                lines += "${sha256(file)}  ${file.relativeTo(root).invariantSeparatorsPath}"
+            }
+        }
+        // app-image 是目录，算逐文件哈希没有意义；给它一个 zip 的哈希（CI 打包上传时用）
+        val zip = File(root, "app-image.zip")
+        if (zip.isFile) lines += "${sha256(zip)}  app-image.zip"
+        if (lines.isEmpty()) throw GradleException("没有找到安装包产物：${root.absolutePath}")
+        val text = lines.joinToString("\n", postfix = "\n")
+        out.get().asFile.writeText(text)
+        logger.lifecycle("[pack] SHA-256：\n$text")
+    }
+}
+
 compose.desktop {
     application {
         mainClass = "com.mytv.mymusic.desktop.MainKt"
@@ -130,7 +297,7 @@ compose.desktop {
             // MSI 给常规安装，EXE 给免安装分发；两者都用 jpackage
             targetFormats(TargetFormat.Msi, TargetFormat.Exe)
             packageName = "myMusic"
-            packageVersion = "1.1.0"
+            packageVersion = pcVersion
             description = "myMusic 桌面版"
             vendor = "myMusic"
 
@@ -147,6 +314,15 @@ compose.desktop {
     }
 }
 
-// 打安装包前必须先有桥；缺 .NET SDK 时 stageSmtcBridge 会跳过，安装包只是没有媒体浮层
+// 打安装包前必须先有桥与 libVLC；缺 .NET SDK / 下载源不可达时任务会跳过或报明确原因
 tasks.matching { it.name.startsWith("package") || it.name.startsWith("createDistributable") }
-    .configureEach { dependsOn(stageSmtcBridge) }
+    .configureEach {
+        dependsOn(stageSmtcBridge)
+        dependsOn(stageVlcRuntime)
+        dependsOn(pcBuildInfo)
+    }
+
+// 校验和必须等产物落地：only the package tasks 会产生 exe/msi/app-image
+tasks.named("pcChecksums") {
+    dependsOn(tasks.matching { it.name in setOf("packageExe", "packageMsi", "createDistributable") })
+}

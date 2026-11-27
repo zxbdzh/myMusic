@@ -1,0 +1,124 @@
+name: PC Build
+
+# 桌面端（:desktop）的 Windows 打包流水线：jpackage 出 app-image / MSI / EXE，
+# 算 SHA-256 并上传产物。Android 的构建仍走 build.yml，两者互不依赖。
+#
+# 触发策略：
+#  - pc / main 分支上改动桌面相关模块时自动跑（避免每次 Android 改动都白跑一遍 10 分钟）；
+#  - 手动 workflow_dispatch 随时可跑；
+#  - PR 只做编译与打包验证（不上传 release）。
+on:
+  push:
+    branches: [pc, main]
+    paths:
+      - 'desktop/**'
+      - 'core/**'
+      - 'playback-core/**'
+      - 'playback-vlc/**'
+      - 'gradle/**'
+      - 'settings.gradle.kts'
+      - 'build.gradle.kts'
+      - '.github/workflows/pc-build.yml'
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - 'core/**'
+      - 'playback-core/**'
+      - 'playback-vlc/**'
+      - 'gradle/**'
+      - 'settings.gradle.kts'
+      - 'build.gradle.kts'
+      - '.github/workflows/pc-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: jpackage (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # JDK 21：jpackage 生成 MSI 需要 WiX 3.x（JDK 22+ 才切 WiX 4），CMP 1.12 与 Kotlin 2.4 均支持
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # :app 也会在 configuration 阶段被求值（settings.gradle.kts 里有它），
+      # windows-latest 自带 Android SDK，这里只是确认环境变量存在，缺了直接报错而不是悄悄降级
+      - name: Check Android SDK (configuration only)
+        shell: pwsh
+        run: |
+          $sdk = $env:ANDROID_HOME
+          if (-not $sdk) { $sdk = $env:ANDROID_SDK_ROOT }
+          if (-not $sdk) { throw "ANDROID_HOME 未设置，:app 配置阶段会失败" }
+          "ANDROID_HOME=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # 版本号带 run_number：MSI 升级规则要求版本递增（同版本重装会被拒）
+      - name: Build app-image / MSI / EXE
+        shell: pwsh
+        env:
+          PC_VERSION: 1.1.${{ github.run_number }}
+        run: |
+          ./gradlew :desktop:createDistributable :desktop:packageMsi :desktop:packageExe `
+            --no-daemon --stacktrace -Porg.gradle.jvmargs=-Xmx4g
+
+      # app-image 是目录，压缩后才有稳定的哈希与可下载形态
+      - name: Zip app-image
+        shell: pwsh
+        run: |
+          $appDir = 'desktop/build/compose/binaries/main/app/myMusic'
+          if (-not (Test-Path $appDir)) { throw "app-image 不存在：$appDir" }
+          Compress-Archive -Path $appDir -DestinationPath 'desktop/build/compose/binaries/main/app-image.zip' -CompressionLevel Optimal
+
+      - name: Verify bundled runtime (JRE + libVLC + SMTC bridge)
+        shell: pwsh
+        run: |
+          $app = 'desktop/build/compose/binaries/main/app/myMusic'
+          $checks = @(
+            "$app/myMusic.exe",
+            "$app/runtime/bin/java.exe",
+            "$app/app/resources/vlc/libvlc.dll",
+            "$app/app/resources/smtc/myMusic.SmtcBridge.exe"
+          )
+          $missing = $checks | Where-Object { -not (Test-Path $_) }
+          if ($missing) { throw "安装包缺少运行期文件：`n$($missing -join "`n")" }
+          "随包运行期文件齐全：`n$($checks -join "`n")"
+
+      - name: SHA-256 checksums
+        shell: pwsh
+        run: |
+          $root = 'desktop/build/compose/binaries/main'
+          $files = Get-ChildItem "$root/exe/*.exe", "$root/msi/*.msi", "$root/app-image.zip"
+          if (-not $files) { throw "没有找到安装包产物" }
+          $lines = foreach ($f in $files) {
+            $hash = (Get-FileHash -Algorithm SHA256 -Path $f.FullName).Hash.ToLower()
+            "$hash  $($f.FullName.Replace((Resolve-Path $root).Path + '\', '').Replace('\', '/'))"
+          }
+          $lines | Out-File -FilePath 'pc-checksums.txt' -Encoding utf8
+          Get-Content 'pc-checksums.txt'
+
+      - name: Show build info
+        shell: pwsh
+        run: |
+          $info = 'desktop/build/pc-build-info.txt'
+          if (Test-Path $info) { Get-Content $info }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: myMusic-pc-${{ github.run_number }}
+          path: |
+            desktop/build/compose/binaries/main/exe/*.exe
+            desktop/build/compose/binaries/main/msi/*.msi
+            desktop/build/compose/binaries/main/app-image.zip
+            pc-checksums.txt
+            desktop/build/pc-build-info.txt
+          if-no-files-found: error
+          retention-days: 14

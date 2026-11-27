@@ -108,12 +108,40 @@ class VlcAudioOutput private constructor(
 /**
  * libVLC 是否装在本机。
  *
- * 判断顺序：`VLC_HOME` 环境变量（随包分发时打包器会设置）→ 三个默认安装目录。
- * 只看 `libvlc.dll` 存在与否，不尝试 `Native.load`——那会把 JNA 的 native 状态污染到进程里，
- * 而"这一步只想知道有没有"。
+ * 判断顺序：随包运行库（jpackage 的 app 资源目录）→ `VLC_HOME` 环境变量（随包分发时打包器会设置）
+ * → 三个默认安装目录 → 工作目录下的 `vlc/`。只看 `libvlc.dll` 存在与否，不尝试 `Native.load`——
+ * 那会把 JNA 的 native 状态污染到进程里，而"这一步只想知道有没有"。
  */
 object VlcInstallation {
-    fun found(): Boolean = candidates().any { File(it).isFile }
+    /**
+     * jpackage 会把 `appResourcesRootDir` 的内容放到 `<app>/resources`，
+     * CMP 在启动时把绝对路径写进 `compose.application.resources.dir`。
+     * 开发态（gradle run）没有这个属性，返回 null。
+     */
+    fun bundledDir(): File? {
+        val resources = System.getProperty("compose.application.resources.dir")
+        if (resources.isNullOrBlank()) return null
+        val dir = File(resources, "vlc")
+        return dir.takeIf { File(it, "libvlc.dll").isFile }
+    }
+
+    /**
+     * 让 JNA 先认随包的 libvlc。
+     *
+     * JNA 只在第一次加载 native 时读 `jna.library.path`，所以必须在任何 vlcj 调用之前执行
+     * （Main 启动第一行）。返回实际生效的目录；没随包运行库时返回 null，交给注册表/安装目录发现。
+     */
+    fun applyBundledRuntime(): File? {
+        val dir = bundledDir() ?: return null
+        val existing = System.getProperty("jna.library.path").orEmpty()
+        val parts = existing.split(File.pathSeparator).filter { it.isNotBlank() }
+        if (dir.absolutePath !in parts) {
+            System.setProperty("jna.library.path", (listOf(dir.absolutePath) + parts).joinToString(File.pathSeparator))
+        }
+        return dir
+    }
+
+    fun found(): Boolean = bundledDir() != null || candidates().any { File(it).isFile }
 
     fun candidates(): List<String> {
         val fromEnv = System.getenv("VLC_HOME")

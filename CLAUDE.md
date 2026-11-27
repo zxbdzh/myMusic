@@ -24,3 +24,11 @@
   `JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"`、
   `ANDROID_HOME="%LOCALAPPDATA%\Android\Sdk"`。
 - 常用命令：`./gradlew :app:assembleDebug`、`./gradlew test`。
+
+## 共存包
+
+- 共存包固定输出到 `app/build/outputs/release/`，文件名 `myMusic-<versionName>-coexist.apk`。
+- 打包命令：PowerShell 先 `$env:APP_ID_SUFFIX=".coexist"`，再
+  `./gradlew :app:assembleCoexistRelease`；包名固定 `com.mytv.mymusic.coexist`，可与官方包共存。
+- 仓库没有 release keystore 时使用 debug 签名；任务会校验 `APP_ID_SUFFIX`，未设置直接失败。
+- 不要把 `app/build/outputs/apk/release/` 里的普通包改名当作共存包发出去。

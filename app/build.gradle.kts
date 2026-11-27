@@ -107,6 +107,25 @@ androidComponents {
     }
 }
 
+// 共存包固定落在 app/build/outputs/release，避免和普通包的 apk/release 混在一起。
+// 包名由 APP_ID_SUFFIX 决定；任务执行前校验，避免把普通包改名当共存包发出去。
+tasks.register<Copy>("assembleCoexistRelease") {
+    group = "build"
+    description = "Build the coexist APK into app/build/outputs/release"
+    dependsOn("assembleRelease")
+    from(layout.buildDirectory.file("outputs/apk/release/myMusic-$appVersionName.apk"))
+    into(layout.buildDirectory.dir("outputs/release"))
+    rename { "myMusic-$appVersionName-coexist.apk" }
+}
+
+gradle.taskGraph.whenReady {
+    if (allTasks.any { it.name == "assembleCoexistRelease" } &&
+        System.getenv("APP_ID_SUFFIX").isNullOrBlank()
+    ) {
+        throw GradleException("共存包需要 APP_ID_SUFFIX=.coexist，当前未设置")
+    }
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

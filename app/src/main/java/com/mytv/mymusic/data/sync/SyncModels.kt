@@ -36,7 +36,56 @@ data class SyncSnapshot(
     val cookies: List<SyncCookie> = emptyList(),
     /** 洛雪自定义音源，连脚本正文一起同步：本机导入的脚本没有地址，丢了只能重新导入。 */
     val lxSources: List<SyncLxSource> = emptyList(),
+    /**
+     * 汽水的一整套设备身份。它和 [cookies] 里那条汽水 Cookie 是**同一套凭据**：
+     * 护照服务按 `device_id` 做风控并按它补发 `odin_tt`，会话也签给这个身份，业务请求
+     * 的设备指纹又是另一份——三份各用各的话，另一台设备在服务端眼里就是「拿着别人签发
+     * 的会话 + 一个陌生设备」。老同步文件没有这一项（null），本机保持自己那份。
+     */
+    val sodaIdentity: SyncSodaIdentity? = null,
+    /**
+     * 网易云播放上报（weblog）的设备号。它和 [cookies] 里那条网易云 Cookie 是**同一套
+     * 凭据**：这个值直接拼进 Cookie 头和 `MUSIC_U` 一起发，服务端按它把同一个账号的播放
+     * 归并成「最近播放 / 听歌排行」。Cookie 整份同步而设备号各进程各一份的话，另一台设备
+     * 拿着同一个 MUSIC_U 却每重启报一个新设备号，历史永远攒不起来。老文件 null，本机保持。
+     */
+    val neteaseIdentity: SyncNeteaseIdentity? = null,
 )
+
+/**
+ * 汽水的一整套设备身份：扫码登录的护照身份（`device_id` 16 位 / `install_id` 15 位
+ * 纯数字）+ 播放上报与业务请求用的设备指纹。
+ *
+ * 轮换（设置里的「重置登录设备」）会写一个新的 [updatedAt]，同步按它判新旧。
+ * [reportDeviceId] 允许为空：另一台设备可能没开播放上报，空的那份不该把本机已有的
+ * 指纹抹掉——抹了业务请求又会退化成「每次都是一个新设备号」。
+ */
+@Serializable
+data class SyncSodaIdentity(
+    val deviceId: String = "",
+    val installId: String = "",
+    val reportDeviceId: String = "",
+    val updatedAt: String = SyncTime.nowIso(),
+)
+
+fun SyncSodaIdentity.changeTimeMillis(): Long = SyncTime.toMillis(updatedAt)
+
+/** 登录身份是主，两个字段缺一个就不算可用；上报指纹可以空。 */
+fun SyncSodaIdentity.isUsable(): Boolean = deviceId.isNotBlank() && installId.isNotBlank()
+
+/**
+ * 网易云播放上报的设备号（32 位随机串）。只有一个值，比汽水那套简单：
+ * 轮换就写一个新的 [updatedAt]，同步按它判新旧。
+ */
+@Serializable
+data class SyncNeteaseIdentity(
+    val deviceId: String = "",
+    val updatedAt: String = SyncTime.nowIso(),
+)
+
+fun SyncNeteaseIdentity.changeTimeMillis(): Long = SyncTime.toMillis(updatedAt)
+
+fun SyncNeteaseIdentity.isUsable(): Boolean = deviceId.isNotBlank()
 
 /** 洛雪自定义音源。[script] 是脚本正文，[deletedAt] 非空表示删除的墓碑。 */
 @Serializable
@@ -268,6 +317,10 @@ fun buildSnapshot(
     /** 本地歌的线索，按 Song.key（local:sha256:…）查；平台歌不在里面。 */
     localRefs: Map<String, SyncTrackRefs> = emptyMap(),
     lxSources: List<SyncLxSource> = emptyList(),
+    /** 汽水的一整套设备身份；没生成过就传 null，老客户端看到会忽略。 */
+    sodaIdentity: SyncSodaIdentity? = null,
+    /** 网易云播放上报的设备号；没生成过就传 null，老客户端看到会忽略。 */
+    neteaseIdentity: SyncNeteaseIdentity? = null,
 ): SyncSnapshot {
     val entriesByPlaylist = entries.groupBy { it.playlistId }
     return SyncSnapshot(
@@ -327,6 +380,8 @@ fun buildSnapshot(
             }
             .filter { includeDeleted },
         lxSources = lxSources,
+        sodaIdentity = sodaIdentity,
+        neteaseIdentity = neteaseIdentity,
     )
 }
 
@@ -432,6 +487,13 @@ fun snapshotSignature(snapshot: SyncSnapshot): String = buildString {
     append(refsSignature(snapshot))
     append("\n--lx--\n")
     append(snapshot.lxSources.sortedBy { it.id }.joinToString("\n") { "${it.id}:${it.scriptHash}:${it.enabled}:${it.deletedAt}" })
+    append("\n--soda-identity--\n")
+    // 设备身份也算内容：轮换过要和别处一样被认出「本机改过」
+    val identity = snapshot.sodaIdentity
+    append(if (identity == null) "-" else "${identity.deviceId}:${identity.installId}:${identity.reportDeviceId}")
+    append("\n--netease-identity--\n")
+    val netease = snapshot.neteaseIdentity
+    append(netease?.deviceId ?: "-")
 }
 
 /** 所有带线索的本地歌：key + 三组线索，排好序；同一首在几个歌单里出现只算一次。 */

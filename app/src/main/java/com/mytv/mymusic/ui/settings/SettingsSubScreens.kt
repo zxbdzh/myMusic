@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -677,9 +678,9 @@ internal fun PlaybackSettingsScreen(
                 onSelect = { actions.setPlaybackMode(it) },
                 label = {
                     when (it) {
-                        PlaybackMode.Auto -> "自动"
-                        PlaybackMode.Priority -> "优先音源"
-                        PlaybackMode.Pinned -> "固定音源"
+                        PlaybackMode.Auto -> "按音质"
+                        PlaybackMode.Priority -> "按顺序"
+                        PlaybackMode.Pinned -> "首选平台"
                     }
                 },
                 modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth(),
@@ -688,12 +689,12 @@ internal fun PlaybackSettingsScreen(
         item(key = "modeNote", contentType = "note") {
             SettingsNote(
                 when (aggregation.playbackMode) {
-                    PlaybackMode.Auto -> "只用已启用的音乐源：歌曲来源平台已启用时优先，未启用则按启用顺序换源；完整音源优先，其次看码率。播放页的音源标签会说明。"
-                    PlaybackMode.Priority -> "只用已启用的音乐源：歌曲来源平台已启用时优先，未启用则按启用顺序换源；排在前面的平台不可用再向后回退。"
+                    PlaybackMode.Auto -> "对可用的整曲按实际码率选择平台。"
+                    PlaybackMode.Priority -> "按「音乐源」页的顺序尝试已启用的平台。"
                     PlaybackMode.Pinned -> if (aggregation.pinnedOnly) {
-                        "只使用指定平台；它取不到地址时直接说明原因，不再回退到其他平台。"
+                        "只使用首选平台，取不到地址时在播放页提示原因。"
                     } else {
-                        "优先使用指定平台；它没有返回地址时仍会回退，并提示实际播放源。"
+                        "优先播放首选平台；失败时尝试其他已启用的平台。"
                     }
                 },
             )
@@ -709,7 +710,7 @@ internal fun PlaybackSettingsScreen(
             )
         }
         if (aggregation.playbackMode == PlaybackMode.Pinned) {
-            item(key = "pinHead", contentType = "sectionHeader") { SectionLabel("固定音源") }
+            item(key = "pinHead", contentType = "sectionHeader") { SectionLabel("首选平台") }
             item(key = "pin", contentType = "chips") {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     pinnable.forEach { provider ->
@@ -720,7 +721,7 @@ internal fun PlaybackSettingsScreen(
             // 回退到别的平台只会播试听或直接中断，这里给一个明确的独占开关。
             item(key = "pinnedOnly", contentType = "switch") {
                 SwitchRow(
-                    title = "只用固定音源",
+                    title = "只用首选平台",
                     checked = aggregation.pinnedOnly,
                     onCheckedChange = { actions.setPinnedOnly(it) },
                     index = 1,
@@ -730,22 +731,26 @@ internal fun PlaybackSettingsScreen(
                 )
             }
         }
-        item(key = "priorityHead", contentType = "sectionHeader") {
-            SectionLabel("音源顺序") {
-                Text("越靠前越先尝试", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        // 顺序只在「按顺序」模式下决定播放平台：按音质按码率挑、首选平台认准一个，
+        // 这两种模式下摆出来只会让人以为排了就能影响结果
+        if (aggregation.playbackMode == PlaybackMode.Priority) {
+            item(key = "priorityHead", contentType = "sectionHeader") {
+                SectionLabel("音源顺序") {
+                    Text("越靠前越先尝试", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
-        }
-        item(key = "priority", contentType = "settingRow") {
-            ListRow(
-                // 顺序全应用只有一份，就在「音乐源」里排；这里只说明现在是什么顺序
-                title = priority.take(3).joinToString(" → ") { providerName(state.providers, it) }
-                    .ifBlank { "还没有平台" },
-                index = 0,
-                count = 1,
-                onClick = { onOpen(SettingsSection.Sources) },
-                icon = Icons.Filled.Tune,
-                summary = "自动换源和手动换源都按这个顺序回退；去「音乐源」里调整",
-            )
+            item(key = "priority", contentType = "settingRow") {
+                ListRow(
+                    // 顺序全应用只有一份，就在「音乐源」里排；这里只说明现在是什么顺序
+                    title = priority.take(3).joinToString(" → ") { providerName(state.providers, it) }
+                        .ifBlank { "还没有平台" },
+                    index = 0,
+                    count = 1,
+                    onClick = { onOpen(SettingsSection.Sources) },
+                    icon = Icons.Filled.Tune,
+                    summary = "按这个顺序选择播放平台。去「音乐源」里调整",
+                )
+            }
         }
         item(key = "matchHead", contentType = "sectionHeader") { SectionLabel("匹配") }
         item(key = "strict", contentType = "switch") {
@@ -783,11 +788,6 @@ internal fun PlaybackSettingsScreen(
                     TextButton(onClick = actions::clearMatchCache, modifier = Modifier.tvFocusRing(CircleShape)) { Text("清除") }
                 },
             )
-        }
-        item(key = "note", contentType = "note") {
-            Box(Modifier.padding(top = 16.dp)) {
-                InfoNote("自动换源与手动换源都使用这里的规则。播放器里始终显示当前实际播放源。")
-            }
         }
     }
 }
@@ -867,7 +867,7 @@ internal fun SourcesSettingsScreen(
             }
         }
         item(key = "note", contentType = "note") {
-            SettingsNote("顺序同时决定聚合搜索、榜单和歌单的来源条、换源面板和播放换源的先后。")
+            SettingsNote("顺序决定聚合搜索、榜单和歌单来源条、换源面板的先后；「按顺序」和「首选平台」下的播放换源也按它排。")
         }
         item(key = "lxSources", contentType = "settingRow") {
             Box(Modifier.padding(top = 16.dp)) {
@@ -1143,6 +1143,7 @@ internal fun AccountsSettingsScreen(
     var qrFor by remember { mutableStateOf<ProviderInfo?>(null) }
     var passwordFor by remember { mutableStateOf<ProviderInfo?>(null) }
     var signerOpen by remember { mutableStateOf(false) }
+    var resetDeviceOpen by remember { mutableStateOf(false) }
     val providers = state.providers.filterNot { it.id.startsWith(com.mytv.mymusic.data.subsonic.SUBSONIC_PROVIDER_PREFIX) }
     val loggedCount = providers.count { !state.cookies[it.id].isNullOrBlank() }
     SettingsPage(
@@ -1180,6 +1181,7 @@ internal fun AccountsSettingsScreen(
                 AccountRow(
                     provider = provider,
                     loggedIn = !state.cookies[provider.id].isNullOrBlank(),
+                    loginExpired = provider.id in state.loginExpiredProviders,
                     profile = state.accountProfiles[provider.id],
                     index = index,
                     count = providers.size,
@@ -1221,7 +1223,7 @@ internal fun AccountsSettingsScreen(
                     ListRow(
                         title = "汽水播放签名器",
                         index = 0,
-                        count = 1,
+                        count = 2,
                         onClick = { signerOpen = true },
                         // 图标用 SodaM 官方 logo：默认连的就是它的公共签名服务
                         leading = {
@@ -1234,6 +1236,14 @@ internal fun AccountsSettingsScreen(
                             ) { SodamLogo(40.dp, Modifier.clip(CircleShape)) }
                         },
                         summary = signerSummary(state),
+                    )
+                    ListRow(
+                        title = "重置登录设备",
+                        index = 1,
+                        count = 2,
+                        onClick = { resetDeviceOpen = true },
+                        icon = Icons.Filled.Devices,
+                        summary = "扫码总被限制、或登录几天就失效时换一份新设备身份",
                     )
                 }
             }
@@ -1257,6 +1267,27 @@ internal fun AccountsSettingsScreen(
                 signerOpen = false
             },
             onDismiss = { signerOpen = false },
+        )
+    }
+    if (resetDeviceOpen) {
+        AlertDialog(
+            onDismissRequest = { resetDeviceOpen = false },
+            title = { Text("重置汽水登录设备") },
+            text = {
+                Text(
+                    "汽水按设备身份做风控：同一个身份用久了服务端才会认。重置后下次扫码用新的身份，" +
+                        "当前的登录状态可能随之失效，需要重新扫码。只在扫码总是失败或登录几天就过期时用。",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    actions.resetSodaLoginDevice()
+                    resetDeviceOpen = false
+                }) { Text("重置") }
+            },
+            dismissButton = {
+                TextButton(onClick = { resetDeviceOpen = false }) { Text("取消") }
+            },
         )
     }
     qrFor?.let { provider ->
@@ -1305,6 +1336,7 @@ internal fun AccountsSettingsScreen(
 private fun AccountRow(
     provider: ProviderInfo,
     loggedIn: Boolean,
+    loginExpired: Boolean = false,
     profile: AccountProfile?,
     index: Int,
     count: Int,
@@ -1320,6 +1352,8 @@ private fun AccountRow(
     // 已登录且拿到资料时展示账号卡片：头像、昵称、会员/等级；拿不到资料就保持原来的平台行
     val avatar = profile?.avatar.orEmpty()
     val summary = when {
+        // 扫码会话几天后就会过期：接口确认失效时直接说该重新扫码，别挂着一行「已登录」
+        loggedIn && loginExpired -> "登录已过期 · 请重新扫码"
         loggedIn -> {
             val info = profile?.let { p -> listOf(p.nickname, p.detail).filter { it.isNotBlank() }.joinToString(" · ") }.orEmpty()
             info.ifBlank { "已登录" }

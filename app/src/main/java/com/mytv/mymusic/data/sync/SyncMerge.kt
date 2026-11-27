@@ -14,6 +14,8 @@ data class SyncContent(
     val favorites: List<SyncFavorite> = emptyList(),
     val cookies: List<SyncCookie> = emptyList(),
     val lxSources: List<SyncLxSource> = emptyList(),
+    val sodaIdentity: SyncSodaIdentity? = null,
+    val neteaseIdentity: SyncNeteaseIdentity? = null,
 )
 
 data class MergeResult(
@@ -22,6 +24,8 @@ data class MergeResult(
     val cookies: List<SyncCookie>,
     val lxSources: List<SyncLxSource>,
     val conflicts: List<MergeConflict>,
+    val sodaIdentity: SyncSodaIdentity? = null,
+    val neteaseIdentity: SyncNeteaseIdentity? = null,
 )
 
 object SyncMerge {
@@ -72,6 +76,8 @@ object SyncMerge {
             cookies = mergeCookies(base?.cookies.orEmpty(), local.cookies, remote.cookies),
             lxSources = mergeLxSources(base?.lxSources.orEmpty(), local.lxSources, remote.lxSources),
             conflicts = conflicts,
+            sodaIdentity = mergeSodaIdentity(local.sodaIdentity, remote.sodaIdentity),
+            neteaseIdentity = mergeNeteaseIdentity(local.neteaseIdentity, remote.neteaseIdentity),
         )
     }
 
@@ -128,8 +134,8 @@ object SyncMerge {
         remote: SyncSnapshot,
         strategy: SyncStrategy,
     ): SyncContent = when (strategy) {
-        SyncStrategy.Local -> SyncContent(local.playlists, local.favorites, local.cookies, local.lxSources)
-        SyncStrategy.Remote -> SyncContent(remote.playlists, remote.favorites, remote.cookies, remote.lxSources)
+        SyncStrategy.Local -> SyncContent(local.playlists, local.favorites, local.cookies, local.lxSources, local.sodaIdentity, local.neteaseIdentity)
+        SyncStrategy.Remote -> SyncContent(remote.playlists, remote.favorites, remote.cookies, remote.lxSources, remote.sodaIdentity, remote.neteaseIdentity)
         SyncStrategy.Merge -> {
             val localMap = local.playlists.associateBy { it.id }
             val remoteMap = remote.playlists.associateBy { it.id }
@@ -140,8 +146,50 @@ object SyncMerge {
                 favorites = unionFavorites(local.favorites, remote.favorites),
                 cookies = unionCookies(local.cookies, remote.cookies),
                 lxSources = mergeLxSources(emptyList(), local.lxSources, remote.lxSources),
+                sodaIdentity = mergeSodaIdentity(local.sodaIdentity, remote.sodaIdentity),
+                neteaseIdentity = mergeNeteaseIdentity(local.neteaseIdentity, remote.neteaseIdentity),
             )
         }
+    }
+
+    /**
+     * 网易云播放上报的设备号按时间取新的（和 Cookie 一样不弹冲突界面）：它是单值，
+     * 也没有「删除」这个状态——轮换就是写一份带新时间戳的设备号，旧快照盖不掉新的。
+     * 两边都没带（老同步文件 / 两台都没生成过）时返回 null，本机保持原样。
+     */
+    fun mergeNeteaseIdentity(local: SyncNeteaseIdentity?, remote: SyncNeteaseIdentity?): SyncNeteaseIdentity? {
+        val l = local?.takeIf { it.isUsable() }
+        val r = remote?.takeIf { it.isUsable() }
+        if (l == null) return r
+        if (r == null) return l
+        if (l.deviceId == r.deviceId) return l
+        return if (r.changeTimeMillis() > l.changeTimeMillis()) r else l
+    }
+
+    /**
+     * 汽水设备身份按时间取新的（和 Cookie 一样不弹冲突界面）：它是单值不是列表，
+     * 也没有「删除」这个状态——轮换就是写一份带新时间戳的身份，旧快照盖不掉新的。
+     * 两边都没带（老同步文件 / 两台都没生成过）时返回 null，本机保持原样。
+     *
+     * 上报指纹额外讲个规矩：它在一台设备上可能根本没生成过（没开播放上报），
+     * 所以赢了那一份如果是空的，要把另一份非空的带回来。不然本机的指纹被抹掉，
+     * 业务请求又会退化成「每次都是一个新设备号」。
+     */
+    fun mergeSodaIdentity(local: SyncSodaIdentity?, remote: SyncSodaIdentity?): SyncSodaIdentity? {
+        val l = local?.takeIf { it.isUsable() }
+        val r = remote?.takeIf { it.isUsable() }
+        if (l == null) return r
+        if (r == null) return l
+        if (l.deviceId == r.deviceId && l.installId == r.installId && l.reportDeviceId == r.reportDeviceId) {
+            return l
+        }
+        val remoteNewer = r.changeTimeMillis() > l.changeTimeMillis()
+        val winner = if (remoteNewer) r else l
+        val loser = if (remoteNewer) l else r
+        if (winner.reportDeviceId.isBlank() && loser.reportDeviceId.isNotBlank()) {
+            return winner.copy(reportDeviceId = loser.reportDeviceId)
+        }
+        return winner
     }
 
     /** 收藏没有冲突界面：两边都改过时按修改时间取新的；时间相同保留本机。 */

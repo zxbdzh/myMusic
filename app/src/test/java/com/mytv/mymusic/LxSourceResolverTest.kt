@@ -20,6 +20,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
 
 class LxSourceResolverTest {
     private class CustomRepository : MusicRepository() {
@@ -27,15 +28,16 @@ class LxSourceResolverTest {
         var generation = 0L
         var supported = setOf("kugou")
         var nativePreview = emptySet<String>()
-        var nativeCalls = 0
-        var lxCalls = 0
+        // 并发探测会同时自增，普通 Int 会丢更新
+        val nativeCalls = AtomicInteger()
+        val lxCalls = AtomicInteger()
         var songSelector: (List<Song>) -> Song = { it.first() }
 
         override fun supportsCustomSource(provider: String): Boolean = provider in supported
         override fun customSourceGeneration(): Long = generation
 
         override suspend fun playableStream(song: Song, cookie: String, workDir: File, quality: AudioQuality): PlayableStream {
-            nativeCalls++
+            nativeCalls.incrementAndGet()
             return PlayableStream(
                 url = "https://native.example.com/${song.source}.mp3",
                 ext = "mp3",
@@ -45,7 +47,7 @@ class LxSourceResolverTest {
         }
 
         override suspend fun playableLxStream(songs: List<Song>, quality: AudioQuality): LxPlaybackResult? {
-            lxCalls++
+            lxCalls.incrementAndGet()
             if (fail || songs.isEmpty()) return null
             val song = songSelector(songs)
             return LxPlaybackResult(
@@ -106,8 +108,9 @@ class LxSourceResolverTest {
         val resolution = resolver(repository).resolve(track, policy = policy("kugou", "lx"))
         val ready = resolution as Resolution.Ready
         assertEquals("kugou", ready.source.providerId)
-        assertEquals(1, repository.nativeCalls)
-        assertEquals(0, repository.lxCalls)
+        assertEquals(1, repository.nativeCalls.get())
+        // 洛雪也参与码率竞争，会被问到；防的是结果被标成来自脚本，不是问没问
+        assertEquals(1, repository.lxCalls.get())
         assertFalse(ready.source.song.extra.containsKey("lx_source"))
     }
 
@@ -164,7 +167,7 @@ class LxSourceResolverTest {
         val target = TrackMatcher.withSource(
             TrackMatcher.singleSource(song, "网易云音乐"),
             nativeSource("qq", "tx"),
-        )
+        ).copy(playbackPlatform = "netease")
         val repository = CustomRepository().apply {
             supported = setOf("netease", "qq")
             nativePreview = setOf("netease")
@@ -186,7 +189,7 @@ class LxSourceResolverTest {
         assertEquals(song.key, ready.source.song.key)
         assertEquals(PlaybackMethod.Lx, ready.source.playbackMethod)
         assertFalse(ready.isPreview)
-        assertEquals(1, repository.nativeCalls)
+        assertEquals(1, repository.nativeCalls.get())
     }
 
     @Test
@@ -238,12 +241,12 @@ class LxSourceResolverTest {
         assertEquals("lx", first.source.providerId)
         val cached = resolver.resolve(multi, excludeProviders = excluded, policy = policy("lx", "kugou", "netease")) as Resolution.Ready
         assertEquals("netease", cached.source.song.source)
-        assertEquals(1, repository.lxCalls)
+        assertEquals(1, repository.lxCalls.get())
 
         resolver.invalidate(first.source)
         resolver.resolve(multi, excludeProviders = excluded, policy = policy("lx", "kugou", "netease"))
-        assertEquals(2, repository.lxCalls)
-        assertEquals(0, repository.nativeCalls)
+        assertEquals(2, repository.lxCalls.get())
+        assertEquals(0, repository.nativeCalls.get())
     }
 
     @Test
@@ -302,7 +305,7 @@ class LxSourceResolverTest {
         val lxOnly = SourcePolicy(priority = listOf("lx"), pinnedProvider = "lx", allowedProviders = setOf("lx"))
         // 第一次只有酷狗候选：洛雪失败进负缓存
         assertTrue(resolver.resolve(first, pinnedProvider = "lx", policy = lxOnly) is Resolution.None)
-        assertEquals(1, repository.lxCalls)
+        assertEquals(1, repository.lxCalls.get())
 
         // expand 补配出网易云变体：候选指纹变了，旧负缓存不能挡住重新尝试
         repository.fail = false
@@ -310,6 +313,6 @@ class LxSourceResolverTest {
         val expanded = first.copy(sources = listOf(kg, wy))
         val ready = resolver.resolve(expanded, pinnedProvider = "lx", policy = lxOnly) as Resolution.Ready
         assertEquals("lx", ready.source.providerId)
-        assertEquals(2, repository.lxCalls)
+        assertEquals(2, repository.lxCalls.get())
     }
 }

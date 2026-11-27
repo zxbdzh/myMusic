@@ -810,7 +810,7 @@ private fun Modifier.longPressFirst(onLongPress: () -> Unit): Modifier = pointer
 
 /**
  * 音源胶囊：32dp 高、16dp 圆角，主色圆点 + 平台名 + “· 音质”，右侧小箭头，点开换源面板。
- * 读屏文案沿用音源 chip（含自动 / 固定模式），胶囊上不显示模式。
+ * 读屏文案沿用音源 chip（含音质 / 顺序 / 首选模式），胶囊上不显示模式。
  */
 @Composable
 internal fun SourcePill(
@@ -827,7 +827,7 @@ internal fun SourcePill(
         modifier = modifier
             .height(32.dp)
             .tvFocusRing(RoundedCornerShape(16.dp))
-            .semantics { contentDescription = "音源：$provider $sourceDetail，$playbackMode。点按切换音源" },
+            .semantics { contentDescription = "音源：$provider $sourceDetail，换源模式：$playbackMode。点按切换音源" },
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.13f),
         contentColor = MaterialTheme.colorScheme.onSurface,

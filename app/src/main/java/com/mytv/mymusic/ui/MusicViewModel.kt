@@ -66,12 +66,14 @@ import com.mytv.mymusic.data.favoriteCredentialFingerprint
 import com.mytv.mymusic.data.favoriteSyncPlaylists
 import com.mytv.mymusic.data.ListenTaskState
 import com.mytv.mymusic.data.native.SodaApplyFreeVipResult
+import com.mytv.mymusic.data.native.SodaLoginExpiredException
 import com.mytv.mymusic.data.native.SodaWelfareInfo
 import com.mytv.mymusic.data.native.SodaProvider
 import com.mytv.mymusic.data.native.SodaWelfare
 import com.mytv.mymusic.data.bindingTarget
 import com.mytv.mymusic.data.platformImportMarks
 import com.mytv.mymusic.data.boundDiff
+import com.mytv.mymusic.data.prependPlaylistEntries
 import com.mytv.mymusic.data.CollectionView
 import com.mytv.mymusic.data.CoverShapeChoice
 import com.mytv.mymusic.data.LyricsBackgroundMode
@@ -372,6 +374,11 @@ data class MusicUiState(
     val loginProviderId: String = "",
     val accountProfiles: Map<String, AccountProfile> = emptyMap(),
     val favoriteSync: Map<String, FavoriteSyncPreference> = emptyMap(),
+    /**
+     * 登录态已失效的平台（汽水扫码会话过期后会出现在这里）：账号卡显示
+     * 「登录已过期，请重新扫码」，别让一行「已登录」挂在那儿。
+     */
+    val loginExpiredProviders: Set<String> = emptySet(),
     val sourcePickerTrack: CanonicalTrack? = null,
     val sourcePickerQueue: List<CanonicalTrack> = emptyList(),
     val sourcePickerBusy: String = "",
@@ -543,6 +550,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val _accountProfiles = MutableStateFlow<Map<String, AccountProfile>>(emptyMap())
     val accountProfiles: StateFlow<Map<String, AccountProfile>> = _accountProfiles
     private val accountInfoJobs = ConcurrentHashMap<String, Job>()
+    /**
+     * 账号资料读取失败且原因是登录态失效的平台（汽水扫码会话几天后就会过期）。
+     * 设置页的账号卡据此显示「登录已过期，请重新扫码」；重新登上或换 Cookie 后清除。
+     */
+    private val _loginExpired = MutableStateFlow<Set<String>>(emptySet())
     /** 上次成功拉到的账号资料（落盘那份），用来判断要不要重新拉；内存里留一份不反复读盘。 */
     private var accountProfileCache: Map<String, CachedAccountProfile> = emptyMap()
 
@@ -651,10 +663,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         base,
         settingsState,
         _accountProfiles,
+        _loginExpired,
         com.mytv.mymusic.playback.CrossfadeStatus.report,
-    ) { ui, settings, profiles, report ->
+    ) { ui, settings, profiles, loginExpired, report ->
         ui.copy(
             crossfadeReport = report,
+            loginExpiredProviders = loginExpired,
             providerId = settings.provider,
             chartsSource = settings.chartsSource,
             playlistsSource = settings.playlistsSource,
@@ -807,6 +821,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                     if (cookie.isBlank()) {
                         accountInfoJobs.remove(id)?.cancel()
                         _accountProfiles.update { it - id }
+                        _loginExpired.update { it - id }
                         accountProfileCache = accountProfileCache - id
                         viewModelScope.launch { app.accountProfiles.remove(id) }
                     } else {
@@ -2614,9 +2629,15 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             return false
         }
         val snapshot = PlaylistSnapshot(playlist, entries)
+        // 加歌默认落到最上面（像网易云那样）；平台不认整单顺序的（网易云只能追加）照旧加到最后
+        val atTop = platformSupportsReorder(playlist)
         writeEntries(
             playlistId,
-            entries + resolved.mapIndexed { index, song -> entryOf(playlistId, entries.size + index, song) },
+            if (atTop) {
+                prependPlaylistEntries(playlistId, entries, resolved, ::entryOf)
+            } else {
+                entries + resolved.mapIndexed { index, song -> entryOf(playlistId, entries.size + index, song) }
+            },
         )
         AppLog.i("PlaylistWrite", "add start provider=$provider link=${playlist.linkId} songs=${resolved.size}")
         try {
@@ -2628,6 +2649,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             report(writeErrorMessage(playlist, "添加", error), true)
             return false
         }
+        // 平台的 add 只认追加，要“在最上”还得把新顺序整单写回去
+        if (atTop) pushBoundReorder(playlistId, playlist, "添加", report)
         AppLog.i("PlaylistWrite", "add ok provider=$provider link=${playlist.linkId} songs=${resolved.size}")
         commitBoundWrite(playlistId)
         scheduleBoundReload(playlistId)
@@ -2654,7 +2677,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
         libraryDao.replaceEntries(
             playlist.id,
-            entries + candidates.mapIndexed { index, song -> entryOf(playlist.id, entries.size + index, song) },
+            prependPlaylistEntries(playlist.id, entries, candidates, ::entryOf),
         )
         libraryDao.markDirty(playlist.id, System.currentTimeMillis())
         app.sync.onLocalChange()
@@ -2974,23 +2997,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 message(writeErrorMessage(playlist, "撤销", error), error = true)
                 return@launchPlaylistEdit
             }
-            if (platformSupportsReorder(playlist)) {
-                val all = libraryDao.entriesOnce(playlistId).mapNotNull(::decodeEntrySong)
-                    .filter { it.source == playlist.linkProvider }
-                if (all.size >= 2) {
-                    runCatching {
-                        app.repository.reorderPlaylistTracks(
-                            playlist.linkProvider,
-                            cookieFor(playlist.linkProvider),
-                            playlist.linkId,
-                            all,
-                        )
-                    }.onFailure {
-                        if (it is CancellationException) throw it
-                        message("已加回，但顺序没能同步到平台", error = true)
-                    }
-                }
-            }
+            pushBoundReorder(playlistId, playlist, "加回", ::message)
             commitBoundWrite(playlistId)
             scheduleBoundReload(playlistId)
         }
@@ -3021,6 +3028,49 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun providerLabel(providerId: String): String =
         app.repository.providerInfo(providerId)?.name ?: providerId
+
+    /**
+     * 把本机的当前顺序整单写回平台。平台的增删都只认追加，加歌“落到最上面”、调整顺序都靠这一步；
+     * 失败不否决已经成功的增删（歌确实加进去了），只提示一句顺序没同步。
+     * 条目里混了非本平台的歌时整体跳过：SeqSonglist 这类接口收的是整单名单，漏谁就是从平台删掉谁。
+     */
+    private suspend fun pushBoundReorder(
+        playlistId: String,
+        playlist: PlaylistEntity,
+        action: String,
+        report: EditReport,
+    ) {
+        if (!platformSupportsReorder(playlist)) return
+        val entries = libraryDao.entriesOnce(playlistId)
+        if (entries.isEmpty()) return
+        if (entries.any { decodeEntrySong(it)?.source != playlist.linkProvider }) {
+            AppLog.w("PlaylistWrite", "reorder skipped: mixed sources playlist=${playlist.id}")
+            return
+        }
+        val all = entries.mapNotNull(::decodeEntrySong)
+        if (all.size < 2) return
+        AppLog.i(
+            "PlaylistWrite",
+            "reorder start provider=${playlist.linkProvider} link=${playlist.linkId} songs=${all.size}",
+        )
+        try {
+            app.repository.reorderPlaylistTracks(
+                playlist.linkProvider,
+                cookieFor(playlist.linkProvider),
+                playlist.linkId,
+                all,
+            )
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            AppLog.w(
+                "PlaylistWrite",
+                "reorder failed provider=${playlist.linkProvider} link=${playlist.linkId}: ${error.message}",
+            )
+            report("已$action，但顺序没能同步到平台", true)
+            return
+        }
+        AppLog.i("PlaylistWrite", "reorder ok provider=${playlist.linkProvider} songs=${all.size}")
+    }
 
     /** 把任意来源的歌曲解析成目标平台的曲目：同源直接过，其次查已合并的音源，最后严格搜索匹配。 */
     private suspend fun resolveForPlaylistWrite(song: Song, providerId: String, cookie: String): Song? {
@@ -5066,7 +5116,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             resolver.buildPolicy(track, null)
         }
-        val source = resolver.orderCandidates(track, null, emptySet(), policy).firstOrNull()
+        val candidates = resolver.orderCandidates(track, null, emptySet(), policy)
+        val source = candidates.firstOrNull()
         if (source == null) {
             // 来源平台被关掉、又没有允许的候选：清掉地址，让 onMediaItemTransition 走
             // resolveQueueItem → resolvePlayable 的自动匹配/洛雪兜底，而不是直接放来源平台的地址
@@ -5080,6 +5131,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         //    只有 playableStream 才拿得到。不清掉的话 onMediaItemTransition 看到 url 非空
         //    就直接放片段，永远不会解析，DRM 三件套也就挂不上 MediaItem。
         return if (song.source in NEEDS_RESOLVE_ON_SWITCH ||
+            (policy.mode == PlaybackMode.Auto && candidates.size > 1) ||
             policy.platformPlayback.keys.any { providerId -> track.sources.any { it.providerId == providerId } }
         ) song.copy(url = "") else song
     }
@@ -5122,6 +5174,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             app.repository.customSourceFailure().takeIf { it.isNotBlank() }?.let { return "洛雪：$it" }
         }
         return when {
+            // 汽水扫码会话过期：把「请重新扫码」说到前面，技术原文只在日志里
+            reasons.any { it.contains("登录已过期") } ->
+                reasons.first { it.contains("登录已过期") }.substringBefore("（")
             reasons.any { it.contains("签名器") } -> reasons.first { it.contains("签名器") }
             reasons.any { it.contains("登录") || it.contains("会员") } -> "这首歌需要登录或会员后才能播放"
             reasons.any { it.contains("试听") } -> "只有试听片段可用，请在设置中允许试听"
@@ -5214,6 +5269,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         forDownload: Boolean = false,
         excludeMethods: Set<String> = emptySet(),
         manualMethod: PlaybackMethod? = null,
+        retryPlatform: String? = null,
     ): AutoResolution {
         if (pinnedProvider != null && manualMethod != null) {
             val effective = if (pinnedProvider == LxPlatform.PROVIDER_ID) expandTrackForLx(track) else track
@@ -5238,7 +5294,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             .takeIf { it.playbackMode == PlaybackMode.Pinned }?.pinnedProvider
         val lxPinned = pinnedProvider == LxPlatform.PROVIDER_ID ||
             (pinnedProvider == null && settingsPinned == LxPlatform.PROVIDER_ID)
-        fun buildPolicy(item: CanonicalTrack) = resolver.buildPolicy(item, pinnedProvider, usePlatformPlayback = !forDownload)
+        fun buildPolicy(item: CanonicalTrack): SourcePolicy {
+            val policy = resolver.buildPolicy(item, pinnedProvider, usePlatformPlayback = !forDownload)
+            val selected = retryPlatform?.takeIf { it in policy.platformPlayback } ?: return policy
+            // 按音质选中的平台起播失败时，先处理该平台的回退或固定规则，再考虑换平台。
+            return policy.copy(preferredPlatform = selected, allowedProviders = policy.allowedProviders?.plus(selected))
+        }
         val effective = if (lxPinned && buildPolicy(track).preferredPlatform == null) {
             expandTrackForLx(track)
         } else track
@@ -5893,7 +5954,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                     resolvePlayable(track, pinnedProvider = failedSource?.providerId)
                 } else {
                     val excludedProviders = if (failedSource?.providerId == LOCAL_SOURCE) setOf(LOCAL_SOURCE) else emptySet()
-                    resolvePlayable(track, excludeProviders = excludedProviders, excludeMethods = excluded)
+                    resolvePlayable(
+                        track,
+                        excludeProviders = excludedProviders,
+                        excludeMethods = excluded,
+                        retryPlatform = failedSource?.providerId,
+                    )
                 }
                 val at = queueIndexOf(track, index)
                 if (base.value.queueId != queueId || at < 0 || controller?.currentMediaItemIndex != at) {
@@ -7297,6 +7363,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         if (cookie.isBlank()) {
             accountInfoJobs.remove(providerId)?.cancel()
             _accountProfiles.update { it - providerId }
+            _loginExpired.update { it - providerId }
             accountProfileCache = accountProfileCache - providerId
             app.accountProfiles.remove(providerId)
         } else {
@@ -7323,7 +7390,18 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             val cached = accountProfileCache[providerId]
             if (!force && cached != null && !cached.isStale()) return@launch
             repeat(ACCOUNT_INFO_ATTEMPTS) { attempt ->
-                val info = runCatching { app.repository.accountInfo(providerId, cookie) }.getOrNull()
+                // 直接找平台要：repository 那层把异常吞成 null，分不出「网络不通」和「登录已过期」
+                val result = runCatching {
+                    com.mytv.mymusic.data.native.NativeProviders.get(providerId)?.accountInfo(cookie)
+                }
+                val info = result.getOrNull()
+                val expired = result.exceptionOrNull() is SodaLoginExpiredException
+                // 只在「确定失效」时置位、「确定还好」时清除：网络不通不该把失效标记擦掉
+                if (expired) {
+                    _loginExpired.update { it + providerId }
+                } else if (info != null) {
+                    _loginExpired.update { it - providerId }
+                }
                 // 只要接口通了就算成功：Apple 只给订阅状态，昵称和头像是空的，
                 // 那种平台的昵称退回平台名，会员等级照样要显示出来
                 if (info != null) {
@@ -7365,6 +7443,17 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 else -> "汽水签名器已保存"
             },
         )
+    }
+
+    /**
+     * 重置汽水扫码登录的设备身份（passport 的 `device_id` / `install_id`）。
+     * 身份被服务端风控盯上时（扫码后一路 `error_code=7`、会话几天就失效）换一份新的；
+     * 换了之后当前登录态多半会失效，要重新扫码。
+     */
+    fun resetSodaLoginDevice() = viewModelScope.launch {
+        val (deviceId, installId) = app.settings.resetSodaLoginDevice()
+        SodaProvider.configureLoginDevice(deviceId, installId)
+        message("已重置汽水登录设备，下次扫码用新设备身份")
     }
 
     /**

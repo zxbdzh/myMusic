@@ -4,8 +4,10 @@ import com.mytv.mymusic.data.sync.SyncCookie
 import com.mytv.mymusic.data.sync.SyncFavorite
 import com.mytv.mymusic.data.sync.SyncJson
 import com.mytv.mymusic.data.sync.SyncMerge
+import com.mytv.mymusic.data.sync.SyncNeteaseIdentity
 import com.mytv.mymusic.data.sync.SyncPlaylist
 import com.mytv.mymusic.data.sync.SyncSnapshot
+import com.mytv.mymusic.data.sync.SyncSodaIdentity
 import com.mytv.mymusic.data.sync.SyncStrategy
 import com.mytv.mymusic.data.sync.SyncTrack
 import com.mytv.mymusic.data.sync.snapshotSignature
@@ -321,5 +323,295 @@ class SyncMergeTest {
         assertEquals(2, decoded.playlists.size)
         assertEquals("2026-10-21T01:00:00Z", decoded.playlists.first { it.id == "p1" }.deletedAt)
         assertEquals(listOf("netease:2", "qq:9"), decoded.playlists.first { it.id == "p2" }.tracks.map { it.key })
+    }
+
+    // ---- 汽水登录设备身份：和登录 Cookie 是同一套凭据，必须一起同步 ----
+
+    private fun sodaIdentity(
+        deviceId: String = "9182736455463728",
+        installId: String = "123456789012345",
+        reportDeviceId: String = "a1b2c3d4e5f6",
+        updatedAt: String = "2026-10-20T10:00:00Z",
+    ) = SyncSodaIdentity(deviceId = deviceId, installId = installId, reportDeviceId = reportDeviceId, updatedAt = updatedAt)
+
+    @Test
+    fun remoteLoginDeviceAppliesWhenLocalHasNone() {
+        val base = snapshot()
+        val local = snapshot()
+        val remote = snapshot().copy(sodaIdentity = sodaIdentity())
+
+        val result = SyncMerge.merge(base, local, remote)
+
+        assertEquals("9182736455463728", result.sodaIdentity?.deviceId)
+        assertEquals("123456789012345", result.sodaIdentity?.installId)
+    }
+
+    @Test
+    fun localLoginDeviceSurvivesRemoteWithoutOne() {
+        val base = snapshot()
+        val local = snapshot().copy(sodaIdentity = sodaIdentity())
+        val remote = snapshot()
+
+        val result = SyncMerge.merge(base, local, remote)
+
+        assertEquals("9182736455463728", result.sodaIdentity?.deviceId)
+    }
+
+    @Test
+    fun newerRotatedLoginDeviceWins() {
+        val base = snapshot().copy(sodaIdentity = sodaIdentity())
+        // 本机轮换过（更新），另一台还是旧身份：取新的
+        val local = snapshot().copy(
+            sodaIdentity = sodaIdentity(deviceId = "5555555555555555", updatedAt = "2026-10-22T09:00:00Z"),
+        )
+        val remote = snapshot().copy(sodaIdentity = sodaIdentity())
+
+        val result = SyncMerge.merge(base, local, remote)
+
+        assertEquals("5555555555555555", result.sodaIdentity?.deviceId)
+    }
+
+    @Test
+    fun olderLoginDeviceDoesNotOverwriteNewerLocal() {
+        val base = snapshot().copy(sodaIdentity = sodaIdentity())
+        val local = snapshot().copy(
+            sodaIdentity = sodaIdentity(deviceId = "5555555555555555", updatedAt = "2026-10-22T09:00:00Z"),
+        )
+        // 云端是轮换前那一版：旧快照盖不掉本机的新身份
+        val remote = snapshot().copy(sodaIdentity = sodaIdentity())
+
+        val result = SyncMerge.merge(base, local, remote)
+
+        assertEquals("5555555555555555", result.sodaIdentity?.deviceId)
+    }
+
+    @Test
+    fun sameLoginDeviceOnBothSidesIsNotAConflict() {
+        val base = snapshot()
+        val local = snapshot().copy(sodaIdentity = sodaIdentity())
+        val remote = snapshot().copy(sodaIdentity = sodaIdentity())
+
+        val result = SyncMerge.merge(base, local, remote)
+
+        assertEquals("9182736455463728", result.sodaIdentity?.deviceId)
+        assertTrue(result.conflicts.isEmpty())
+    }
+
+    @Test
+    fun oldSyncFileWithoutLoginDeviceLeavesLocalAlone() {
+        val base = snapshot()
+        val local = snapshot().copy(sodaIdentity = sodaIdentity())
+        // 老同步文件没有这一项（null）：本机保持自己那份
+        val remote = snapshot().copy(sodaIdentity = null)
+
+        val result = SyncMerge.merge(base, local, remote)
+
+        assertEquals("9182736455463728", result.sodaIdentity?.deviceId)
+    }
+
+    @Test
+    fun initialMergeStrategiesPickTheRightLoginDevice() {
+        val local = snapshot().copy(sodaIdentity = sodaIdentity(deviceId = "1111111111111111"))
+        val remote = snapshot().copy(
+            sodaIdentity = sodaIdentity(deviceId = "2222222222222222", updatedAt = "2026-10-23T10:00:00Z"),
+        )
+        assertEquals(
+            "1111111111111111",
+            SyncMerge.applyStrategy(local, remote, SyncStrategy.Local).sodaIdentity?.deviceId,
+        )
+        assertEquals(
+            "2222222222222222",
+            SyncMerge.applyStrategy(local, remote, SyncStrategy.Remote).sodaIdentity?.deviceId,
+        )
+        assertEquals(
+            "2222222222222222",
+            SyncMerge.applyStrategy(local, remote, SyncStrategy.Merge).sodaIdentity?.deviceId,
+        )
+    }
+
+    @Test
+    fun halfFilledLoginDeviceIsIgnored() {
+        // 只有一个字段（坏数据 / 老格式）不当可用：不能顶掉另一边完整的那份
+        val half = SyncSodaIdentity(deviceId = "9182736455463728")
+        assertEquals(
+            "9182736455463728",
+            SyncMerge.mergeSodaIdentity(sodaIdentity(), half)?.deviceId,
+        )
+        assertEquals(
+            "123456789012345",
+            SyncMerge.mergeSodaIdentity(SyncSodaIdentity(installId = "123456789012345"), sodaIdentity())?.installId,
+        )
+        assertNull(SyncMerge.mergeSodaIdentity(half, SyncSodaIdentity(installId = "123456789012345")))
+        assertNull(SyncMerge.mergeSodaIdentity(null, SyncSodaIdentity()))
+    }
+
+    @Test
+    fun remoteReportFingerprintAppliesWithLoginIdentity() {
+        val base = snapshot()
+        val local = snapshot()
+        val remote = snapshot().copy(sodaIdentity = sodaIdentity(reportDeviceId = "ffffffffffff"))
+
+        val result = SyncMerge.merge(base, local, remote)
+
+        assertEquals("9182736455463728", result.sodaIdentity?.deviceId)
+        assertEquals("ffffffffffff", result.sodaIdentity?.reportDeviceId)
+    }
+
+    @Test
+    fun blankReportFingerprintDoesNotEraseLocalOne() {
+        // 另一台没开播放上报：它那份身份赢了，但不能把本机的指纹抹掉——
+        // 抹了业务请求又会退化成「每次都是一个新设备号」
+        val base = snapshot()
+        val local = snapshot().copy(sodaIdentity = sodaIdentity(reportDeviceId = "localreport01"))
+        val remote = snapshot().copy(
+            sodaIdentity = sodaIdentity(
+                deviceId = "5555555555555555",
+                reportDeviceId = "",
+                updatedAt = "2026-10-22T09:00:00Z",
+            ),
+        )
+
+        val result = SyncMerge.merge(base, local, remote)
+
+        assertEquals("5555555555555555", result.sodaIdentity?.deviceId)
+        assertEquals("localreport01", result.sodaIdentity?.reportDeviceId)
+    }
+
+    @Test
+    fun newerReportFingerprintWins() {
+        val base = snapshot().copy(sodaIdentity = sodaIdentity(reportDeviceId = "oldreport001"))
+        val local = snapshot().copy(
+            sodaIdentity = sodaIdentity(reportDeviceId = "newreport001", updatedAt = "2026-10-22T09:00:00Z"),
+        )
+        val remote = snapshot().copy(sodaIdentity = sodaIdentity(reportDeviceId = "oldreport001"))
+
+        val result = SyncMerge.merge(base, local, remote)
+
+        assertEquals("newreport001", result.sodaIdentity?.reportDeviceId)
+    }
+
+    // ---- 网易云播放上报设备号：和 MUSIC_U 是同一套凭据，必须一起同步 ----
+
+    private fun neteaseIdentity(
+        deviceId: String = "0123456789abcdef0123456789abcdef",
+        updatedAt: String = "2026-10-20T10:00:00Z",
+    ) = SyncNeteaseIdentity(deviceId = deviceId, updatedAt = updatedAt)
+
+    @Test
+    fun remoteNeteaseReportDeviceAppliesWhenLocalHasNone() {
+        val result = SyncMerge.merge(
+            snapshot(),
+            snapshot(),
+            snapshot().copy(neteaseIdentity = neteaseIdentity()),
+        )
+
+        assertEquals("0123456789abcdef0123456789abcdef", result.neteaseIdentity?.deviceId)
+    }
+
+    @Test
+    fun localNeteaseReportDeviceSurvivesRemoteWithoutOne() {
+        val result = SyncMerge.merge(
+            snapshot(),
+            snapshot().copy(neteaseIdentity = neteaseIdentity()),
+            snapshot(),
+        )
+
+        assertEquals("0123456789abcdef0123456789abcdef", result.neteaseIdentity?.deviceId)
+    }
+
+    @Test
+    fun newerNeteaseReportDeviceWins() {
+        val base = snapshot().copy(neteaseIdentity = neteaseIdentity())
+        // 另一台换了新设备号（更新），本机还是旧的：取新的
+        val local = snapshot().copy(neteaseIdentity = neteaseIdentity())
+        val remote = snapshot().copy(
+            neteaseIdentity = neteaseIdentity(deviceId = "ffffffffffffffffffffffffffffffff", updatedAt = "2026-10-22T09:00:00Z"),
+        )
+
+        val result = SyncMerge.merge(base, local, remote)
+
+        assertEquals("ffffffffffffffffffffffffffffffff", result.neteaseIdentity?.deviceId)
+    }
+
+    @Test
+    fun olderNeteaseReportDeviceDoesNotOverwriteLocal() {
+        val base = snapshot().copy(neteaseIdentity = neteaseIdentity())
+        val local = snapshot().copy(
+            neteaseIdentity = neteaseIdentity(deviceId = "localdevice00000000000000000000", updatedAt = "2026-10-22T09:00:00Z"),
+        )
+        val remote = snapshot().copy(neteaseIdentity = neteaseIdentity())
+
+        val result = SyncMerge.merge(base, local, remote)
+
+        assertEquals("localdevice00000000000000000000", result.neteaseIdentity?.deviceId)
+    }
+
+    @Test
+    fun sameNeteaseReportDeviceIsNotAConflict() {
+        val local = snapshot().copy(neteaseIdentity = neteaseIdentity())
+        val remote = snapshot().copy(neteaseIdentity = neteaseIdentity())
+
+        val result = SyncMerge.merge(snapshot(), local, remote)
+
+        assertEquals("0123456789abcdef0123456789abcdef", result.neteaseIdentity?.deviceId)
+        assertTrue(result.conflicts.isEmpty())
+    }
+
+    @Test
+    fun oldSyncFileWithoutNeteaseReportDeviceLeavesLocalAlone() {
+        val result = SyncMerge.merge(
+            snapshot(),
+            snapshot().copy(neteaseIdentity = neteaseIdentity()),
+            snapshot().copy(neteaseIdentity = null),
+        )
+
+        assertEquals("0123456789abcdef0123456789abcdef", result.neteaseIdentity?.deviceId)
+    }
+
+    @Test
+    fun neteaseStrategiesPickTheRightReportDevice() {
+        val local = snapshot().copy(neteaseIdentity = neteaseIdentity(deviceId = "11111111111111111111111111111111"))
+        val remote = snapshot().copy(
+            neteaseIdentity = neteaseIdentity(deviceId = "22222222222222222222222222222222", updatedAt = "2026-10-23T10:00:00Z"),
+        )
+        assertEquals(
+            "11111111111111111111111111111111",
+            SyncMerge.applyStrategy(local, remote, SyncStrategy.Local).neteaseIdentity?.deviceId,
+        )
+        assertEquals(
+            "22222222222222222222222222222222",
+            SyncMerge.applyStrategy(local, remote, SyncStrategy.Remote).neteaseIdentity?.deviceId,
+        )
+        assertEquals(
+            "22222222222222222222222222222222",
+            SyncMerge.applyStrategy(local, remote, SyncStrategy.Merge).neteaseIdentity?.deviceId,
+        )
+    }
+
+    @Test
+    fun blankNeteaseReportDeviceIsIgnored() {
+        assertNull(SyncMerge.mergeNeteaseIdentity(null, null))
+        assertNull(SyncMerge.mergeNeteaseIdentity(SyncNeteaseIdentity(), SyncNeteaseIdentity()))
+        assertEquals(
+            "0123456789abcdef0123456789abcdef",
+            SyncMerge.mergeNeteaseIdentity(neteaseIdentity(), SyncNeteaseIdentity())?.deviceId,
+        )
+        assertEquals(
+            "0123456789abcdef0123456789abcdef",
+            SyncMerge.mergeNeteaseIdentity(SyncNeteaseIdentity(), neteaseIdentity())?.deviceId,
+        )
+    }
+
+    @Test
+    fun neteaseIdentityRidesAlongInSnapshotSignature() {
+        // 只改设备号也要被认出「本机改过」，不然不会上传
+        val one = snapshot().copy(neteaseIdentity = neteaseIdentity(deviceId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+        val two = snapshot().copy(neteaseIdentity = neteaseIdentity(deviceId = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
+        assertNotEquals(snapshotSignature(one), snapshotSignature(two))
+        // 两边都没有时签名一致，老文件不会因此被误判成改过
+        assertEquals(
+            snapshotSignature(snapshot().copy(neteaseIdentity = null)),
+            snapshotSignature(snapshot().copy(neteaseIdentity = null)),
+        )
     }
 }

@@ -17,6 +17,8 @@ import com.mytv.mymusic.data.PlaylistEntryEntity
 import com.mytv.mymusic.data.SavedSong
 import com.mytv.mymusic.data.SavedSongTombstone
 import com.mytv.mymusic.data.SettingsStore
+import com.mytv.mymusic.data.NeteaseIdentitySnapshot
+import com.mytv.mymusic.data.SodaIdentitySnapshot
 import com.mytv.mymusic.data.SyncAccountEntity
 import com.mytv.mymusic.data.SyncBaseEntity
 import com.mytv.mymusic.data.SyncConflictEntity
@@ -388,6 +390,8 @@ class SyncCoordinator(
                                 favorites = result.favorites,
                                 cookies = result.cookies,
                                 lxSources = result.lxSources,
+                                sodaIdentity = result.sodaIdentity,
+                                neteaseIdentity = result.neteaseIdentity,
                             ),
                             removeAbsent = false,
                             dirty = true,
@@ -427,6 +431,8 @@ class SyncCoordinator(
                         favorites = result.favorites,
                         cookies = result.cookies,
                         lxSources = result.lxSources,
+                        sodaIdentity = result.sodaIdentity,
+                        neteaseIdentity = result.neteaseIdentity,
                     )
                     var uploaded: RemoteFile? = null
                     var round = 0
@@ -451,6 +457,8 @@ class SyncCoordinator(
                                             favorites = again.favorites,
                                             cookies = again.cookies,
                                             lxSources = again.lxSources,
+                                            sodaIdentity = again.sodaIdentity,
+                                            neteaseIdentity = again.neteaseIdentity,
                                         ),
                                         removeAbsent = false,
                                         dirty = true,
@@ -486,6 +494,8 @@ class SyncCoordinator(
                                 favorites = again.favorites,
                                 cookies = again.cookies,
                                 lxSources = again.lxSources,
+                                sodaIdentity = again.sodaIdentity,
+                                neteaseIdentity = again.neteaseIdentity,
                             )
                             currentRemoteFile = latest
                             continue
@@ -740,6 +750,8 @@ class SyncCoordinator(
                     favorites = content.favorites,
                     cookies = content.cookies,
                     lxSources = content.lxSources,
+                    sodaIdentity = content.sodaIdentity,
+                    neteaseIdentity = content.neteaseIdentity,
                 )
             }
             var remoteFile = pending.remoteFile
@@ -1211,6 +1223,8 @@ class SyncCoordinator(
             favorites = content.favorites,
             cookies = content.cookies,
             lxSources = content.lxSources,
+            sodaIdentity = content.sodaIdentity,
+            neteaseIdentity = content.neteaseIdentity,
         )
         if (strategy == SyncStrategy.Remote) {
             db.withTransaction { libraryDao.clearPlaylists() }
@@ -1343,6 +1357,8 @@ class SyncCoordinator(
 
     private suspend fun localSnapshot(includeDeleted: Boolean = true): SyncSnapshot {
         val cookieSnapshot = settings.cookieSnapshot()
+        val sodaIdentity = settings.sodaIdentitySnapshot().toSyncSodaIdentity()
+        val neteaseIdentity = settings.neteaseWeblogDeviceSnapshot().toSyncNeteaseIdentity()
         val playlists = libraryDao.allPlaylistsOnce()
         val entries = libraryDao.allEntriesOnce()
         val favorites = musicDao.songsOnce("favorite")
@@ -1363,6 +1379,28 @@ class SyncCoordinator(
             cookieUpdatedAt = cookieSnapshot.updatedAt,
             localRefs = refs,
             lxSources = lxStore?.snapshot().orEmpty(),
+            sodaIdentity = sodaIdentity,
+            neteaseIdentity = neteaseIdentity,
+        )
+    }
+
+    /** 没生成过登录身份（两个字段不全）就不进同步文件，老客户端看到 null 会忽略。 */
+    private fun SodaIdentitySnapshot.toSyncSodaIdentity(): SyncSodaIdentity? {
+        if (deviceId.isBlank() || installId.isBlank()) return null
+        return SyncSodaIdentity(
+            deviceId = deviceId,
+            installId = installId,
+            reportDeviceId = reportDeviceId,
+            updatedAt = SyncTime.toIso(if (updatedAt > 0L) updatedAt else System.currentTimeMillis()),
+        )
+    }
+
+    /** 没生成过就不进同步文件，老客户端看到 null 会忽略。 */
+    private fun NeteaseIdentitySnapshot.toSyncNeteaseIdentity(): SyncNeteaseIdentity? {
+        if (deviceId.isBlank()) return null
+        return SyncNeteaseIdentity(
+            deviceId = deviceId,
+            updatedAt = SyncTime.toIso(if (updatedAt > 0L) updatedAt else System.currentTimeMillis()),
         )
     }
 
@@ -1384,6 +1422,8 @@ class SyncCoordinator(
         }
         applyFavorites(snapshot.favorites, removeAbsent)
         applyCookies(snapshot.cookies, removeAbsent)
+        applySodaIdentity(snapshot.sodaIdentity)
+        applyNeteaseIdentity(snapshot.neteaseIdentity)
         applyLocalRefs(SyncRefMerge.index(snapshot).values)
         applyLxSources(snapshot.lxSources, removeAbsent)
     }
@@ -1465,6 +1505,40 @@ class SyncCoordinator(
             }
         }
         settings.applyCookies(active, updatedAt, removeAbsent)
+    }
+
+    /**
+     * 汽水设备身份写回本机。它和登录 Cookie 是同一套凭据（护照按 device_id 风控、按它
+     * 补发 odin_tt、会话也签给它，业务请求的设备指纹又是另一份），所以跟着 Cookie 一起
+     * 同步；判新旧在合并层，这里只负责落盘。老同步文件没有这一项时什么都不做。
+     */
+    private suspend fun applySodaIdentity(identity: SyncSodaIdentity?) {
+        if (identity == null || !identity.isUsable()) return
+        val adopted = settings.adoptSodaIdentity(
+            deviceId = identity.deviceId,
+            installId = identity.installId,
+            reportDeviceId = identity.reportDeviceId,
+            updatedAt = SyncTime.toMillis(identity.updatedAt),
+        )
+        if (adopted) {
+            com.mytv.mymusic.AppLog.i("Sync", "已采用同步带来的汽水设备身份")
+        }
+    }
+
+    /**
+     * 网易云播放上报的设备号写回本机。它和 [com.mytv.mymusic.data.SyncCookie] 里那条
+     * 网易云 Cookie 是同一套凭据：这个值是拼进 Cookie 头和 MUSIC_U 一起发出去的，服务端
+     * 按它把同一个账号的播放归并成「最近播放 / 听歌排行」；判新旧在合并层，这里只负责落盘。
+     */
+    private suspend fun applyNeteaseIdentity(identity: SyncNeteaseIdentity?) {
+        if (identity == null || !identity.isUsable()) return
+        val adopted = settings.adoptNeteaseWeblogDevice(
+            deviceId = identity.deviceId,
+            updatedAt = SyncTime.toMillis(identity.updatedAt),
+        )
+        if (adopted) {
+            com.mytv.mymusic.AppLog.i("Sync", "已采用同步带来的网易云上报设备号")
+        }
     }
 
     private fun SyncSnapshot.hasUserData(): Boolean =
@@ -1613,6 +1687,8 @@ class SyncCoordinator(
                             favorites = result.favorites,
                             cookies = result.cookies,
                             lxSources = result.lxSources,
+                            sodaIdentity = result.sodaIdentity,
+                        neteaseIdentity = result.neteaseIdentity,
                         ),
                         removeAbsent = false,
                         dirty = true,
@@ -1645,6 +1721,8 @@ class SyncCoordinator(
                 favorites = result.favorites,
                 cookies = result.cookies,
                 lxSources = result.lxSources,
+                sodaIdentity = result.sodaIdentity,
+                neteaseIdentity = result.neteaseIdentity,
             )
             // 上传前再确认一次；若又变了，回到循环开头按最新内容重新合并
             val check = provider.read(token, account.remoteId)

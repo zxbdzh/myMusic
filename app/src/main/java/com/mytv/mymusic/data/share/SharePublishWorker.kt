@@ -20,6 +20,7 @@ import com.mytv.mymusic.MyMusicApp
 import com.mytv.mymusic.R
 import kotlinx.serialization.Serializable
 import java.io.File
+import java.util.UUID
 
 /**
  * 一次发布要交给后台的全部输入。音频已经准备好（临时文件），这里只描述"传什么、传到哪"。
@@ -135,14 +136,17 @@ internal class SharePublishWorker(context: Context, params: WorkerParameters) : 
         const val KEY_ERROR = "error"
 
         /** 每次发布一个唯一的 work 名：同一个幂等键重复入队时保留先到的那个。 */
-        fun enqueue(context: Context, request: SharePublishRequest) {
-            val manager = BackgroundWork.get(context) ?: return
+        fun enqueue(context: Context, request: SharePublishRequest): UUID? {
+            val manager = BackgroundWork.get(context) ?: return null
+            // 用户主动点的一次发布：不挂网络约束，立刻开始传。
+            // 部分连接（PARTIAL_CONNECTIVITY）的网络上 CONNECTED 约束会被判不满足，任务被取消后不再重排，界面就永远停在「上传中」。
             val work = OneTimeWorkRequestBuilder<SharePublishWorker>()
-                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .setInputData(workDataOf(KEY_REQUEST to shareJson.encodeToString(request)))
                 .addTag(TAG)
                 .build()
             manager.enqueueUniqueWork("$TAG-${request.idempotencyKey}", ExistingWorkPolicy.KEEP, work)
+            // 返回任务 id：界面按 id 监听最终状态，比按名字查更直接
+            return work.id
         }
 
         private fun ensureChannel(context: Context) {
@@ -162,3 +166,4 @@ internal class SharePublishWorker(context: Context, params: WorkerParameters) : 
         }
     }
 }
+

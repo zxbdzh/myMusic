@@ -7043,7 +7043,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 message(error.message?.takeIf { it.isNotBlank() } ?: "音频准备失败", error = true)
                 return@launch
             }
-        com.mytv.mymusic.data.share.SharePublishWorker.enqueue(
+        val workId = com.mytv.mymusic.data.share.SharePublishWorker.enqueue(
             context,
             com.mytv.mymusic.data.share.SharePublishRequest(
                 serverUrl = origin,
@@ -7053,7 +7053,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 audioType = com.mytv.mymusic.data.share.shareMediaType(audio.path),
             ),
         )
-        observeSharePublish(context, idempotencyKey)
+        if (workId == null) {
+            _sharePublish.value = _sharePublish.value.reduce(SharePublishEvent.Failed("后台任务没能启动，稍后再试"))
+            message("后台任务没能启动，稍后再试", error = true)
+            return@launch
+        }
+        observeSharePublish(context, workId)
         message("已开始上传「${song.title}」，可以离开这一页")
     }
 
@@ -7092,19 +7097,26 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         loadShares()
     }
 
-    /** 跟着后台任务更新分享页的状态：成功回传链接，失败给原因，重试由用户点。 */    private fun observeSharePublish(context: Application, idempotencyKey: String) {
+    /** 跟着后台任务更新分享页的状态：成功回传链接，还在处理就等转码完成，失败给原因。 */
+    private fun observeSharePublish(context: Application, workId: java.util.UUID) {
         sharePublishJob?.cancel()
         sharePublishJob = viewModelScope.launch {
             val manager = BackgroundWork.get(context) ?: return@launch
-            manager.getWorkInfosForUniqueWorkFlow("SharePublishWorker-$idempotencyKey").collect { infos ->
-                val info = infos.firstOrNull() ?: return@collect
+            manager.getWorkInfoByIdFlow(workId).collect { info ->
+                if (info == null) return@collect
                 when (info.state) {
                     WorkInfo.State.SUCCEEDED -> {
                         val url = info.outputData.getString(com.mytv.mymusic.data.share.SharePublishWorker.KEY_URL).orEmpty()
-                        val status = info.outputData.getString(com.mytv.mymusic.data.share.SharePublishWorker.KEY_STATUS).orEmpty()
-                        _sharePublish.value = _sharePublish.value
-                            .reduce(SharePublishEvent.ServerAccepted)
-                            .let { if (status == "ready" && url.isNotBlank()) it.reduce(SharePublishEvent.Ready(url)) else it }
+                        val shareId = info.outputData.getString(com.mytv.mymusic.data.share.SharePublishWorker.KEY_SHARE_ID).orEmpty()
+                        _sharePublish.value = _sharePublish.value.reduce(SharePublishEvent.ServerAccepted)
+                        if (url.isNotBlank()) {
+                            _sharePublish.value = _sharePublish.value.reduce(SharePublishEvent.Ready(url))
+                        } else if (shareId.isNotBlank()) {
+                            // 整曲分享在服务端还要校验与转码，链接不会立刻就有，按 id 轮询到出结果
+                            awaitShareReady(shareId)
+                        } else {
+                            _sharePublish.value = _sharePublish.value.reduce(SharePublishEvent.Failed("服务端没有返回链接"))
+                        }
                     }
 
                     WorkInfo.State.FAILED, WorkInfo.State.CANCELLED -> _sharePublish.value = _sharePublish.value.reduce(
@@ -7119,6 +7131,27 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+    }
+
+    /** 上传成功后的处理阶段：每 3 秒问一次服务端，最长等 3 分钟。 */
+    private suspend fun awaitShareReady(shareId: String) {
+        val origin = com.mytv.mymusic.data.share.normalizeShareServerUrl(settingsState.value.share.serverUrl) ?: return
+        val token = app.secretStore.secret(com.mytv.mymusic.data.share.shareTokenName(origin)).orEmpty()
+        if (token.isBlank()) return
+        val client = com.mytv.mymusic.data.share.ShareServiceClient(origin, token, http)
+        repeat(60) {
+            delay(3_000)
+            val detail = runCatching { client.get(shareId) }.getOrNull()
+            if (detail?.url?.isNotBlank() == true) {
+                _sharePublish.value = _sharePublish.value.reduce(SharePublishEvent.Ready(detail.url))
+                return
+            }
+            if (detail?.status == "failed") {
+                _sharePublish.value = _sharePublish.value.reduce(SharePublishEvent.Failed("服务端处理失败"))
+                return
+            }
+        }
+        _sharePublish.value = _sharePublish.value.reduce(SharePublishEvent.Failed("服务端处理超时，稍后到「我的分享」里看"))
     }
 
     /**

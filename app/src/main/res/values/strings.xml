@@ -22,4 +22,6 @@
     <string name="widget_tools_name">快捷入口</string>
     <string name="widget_tools_description">听歌识曲、搜索、我喜欢、定时关闭</string>
     <string name="widget_config_title">小组件设置</string>
+    <string name="share_publish_channel">在线分享</string>
+    <string name="share_publish_channel_description">上传音频副本并生成听歌链接</string>
 </resources>

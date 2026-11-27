@@ -3542,13 +3542,20 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val favoriteMutex = Mutex()
     private val favoriteWrites = FavoriteWriteQueue(viewModelScope)
 
-    fun toggleFavorite(song: Song) = viewModelScope.launch { changeFavorite(song) }
+    fun toggleFavorite(song: Song) = viewModelScope.launch { changeFavorite(favoriteWriteSong(song)) }
 
-    internal fun addFavorite(song: Song) = viewModelScope.launch { changeFavorite(song, selected = true) }
+    internal fun addFavorite(song: Song) = viewModelScope.launch { changeFavorite(favoriteWriteSong(song), selected = true) }
 
     internal fun removeFavorite(song: Song): Deferred<FavoriteUndo?> = viewModelScope.async {
-        changeFavorite(song, selected = false)?.undo
+        changeFavorite(favoriteWriteSong(song), selected = false)?.undo
     }
+
+    /**
+     * 播放时 current 可能已被 LX 换成实际取流源（例如网易云的歌用 QQ 播放）。
+     * 收藏仍写回歌曲原本所属的平台；只有正在播放的这首歌才按主来源校正。
+     */
+    private fun favoriteWriteSong(song: Song): Song =
+        favoriteSourceSong(song, base.value.current, base.value.currentTrack?.sources?.firstOrNull()?.song)
 
     internal fun undoFavorite(removal: Deferred<FavoriteUndo?>) = viewModelScope.launch {
         val undo = removal.await() ?: return@launch
@@ -6666,6 +6673,84 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val origin = com.mytv.mymusic.data.share.normalizeShareServerUrl(base.value.share.serverUrl) ?: return@launch
         app.secretStore.removeSecret(com.mytv.mymusic.data.share.shareTokenName(origin))
     }
+
+    /**
+     * 发布一次在线分享：先在应用进程里准备音频（与下载同一条取流路径），再交给 WorkManager 上传。
+     *
+     * 准备阶段要用当前登录态与解析器，离不开应用进程；上传阶段不依赖界面，用户离开分享页也能继续。
+     */
+    internal fun publishShare(
+        song: Song,
+        lines: List<com.mytv.mymusic.data.share.ShareLyricSource>,
+        selectedIndexes: Set<Int>,
+        template: com.mytv.mymusic.data.ShareCardStyle,
+        quality: com.mytv.mymusic.data.native.AudioQuality,
+        mode: com.mytv.mymusic.data.share.ShareMode,
+        clip: com.mytv.mymusic.data.share.ShareClipRange?,
+    ) = viewModelScope.launch {
+        val context = getApplication<Application>()
+        val origin = com.mytv.mymusic.data.share.normalizeShareServerUrl(base.value.share.serverUrl)
+        if (origin == null) {
+            message("先在设置 › 在线分享里填写分享服务地址", error = true)
+            return@launch
+        }
+        val metadata = runCatching {
+            com.mytv.mymusic.data.share.buildShareMetadata(
+                song = song,
+                style = template,
+                quality = quality,
+                lines = lines,
+                selectedIndexes = selectedIndexes,
+                durationMs = song.duration.coerceAtLeast(0) * 1000L,
+                mode = mode,
+                clip = clip,
+            )
+        }.getOrElse { error ->
+            message(error.message?.takeIf { it.isNotBlank() } ?: "分享内容不完整", error = true)
+            return@launch
+        }
+
+        message("正在准备音频…")
+        val audio = runCatching { prepareShareAudio(song, context) }
+            .getOrElse { error ->
+                message(error.message?.takeIf { it.isNotBlank() } ?: "音频准备失败", error = true)
+                return@launch
+            }
+        com.mytv.mymusic.data.share.SharePublishWorker.enqueue(
+            context,
+            com.mytv.mymusic.data.share.SharePublishRequest(
+                serverUrl = origin,
+                idempotencyKey = com.mytv.mymusic.data.share.newShareIdempotencyKey(),
+                metadata = metadata,
+                audioPath = audio.absolutePath,
+                audioType = com.mytv.mymusic.data.share.shareMediaType(audio.path),
+            ),
+        )
+        message("已开始上传「${song.title}」，可以离开这一页")
+    }
+
+    /**
+     * 取流地址与下载完全一致（含 Subsonic 的鉴权地址）。
+     *
+     * shortcut: 地址被 CDN 拒绝时这里不自动重新取流，由用户重试一次；接上失效重取后再补。
+     */
+    private suspend fun prepareShareAudio(song: Song, context: Application): File {
+        val resolved = resolvePlayable(canonicalForSong(song), forDownload = true)
+        val ready = resolved.resolution as? Resolution.Ready
+        if (ready == null || ready.url.isBlank()) error("没有可分享的音频地址")
+        val url = if (ready.source.providerId.startsWith(com.mytv.mymusic.data.subsonic.SUBSONIC_PROVIDER_PREFIX)) {
+            app.repository.downloadUrl(ready.source.song, cookieFor(ready.source.providerId))
+        } else {
+            ready.url
+        }
+        // 后缀只用来给服务端声明 Content-Type，取的是这次真实地址的后缀
+        val extension = listOf(
+            ready.source.song.ext,
+            Uri.parse(url).path?.let { File(it).extension }.orEmpty(),
+        ).firstOrNull { it.isNotBlank() }?.lowercase() ?: "mp3"
+        val directory = File(context.cacheDir, "share").apply { mkdirs() }
+        return com.mytv.mymusic.data.share.ShareAudioPreparer(directory, http).prepare(url, extension)
+    }
     fun setLyricStage(transform: (LyricStagePrefs) -> LyricStagePrefs) = viewModelScope.launch { app.settings.lyricStage(transform) }
     fun setLyricText(transform: (LyricTextPrefs) -> LyricTextPrefs) = viewModelScope.launch { app.settings.lyricText(transform) }
     suspend fun lyricMemory(songKey: String): LyricMemoryEntry? = app.settings.lyricMemory(songKey)
@@ -7836,6 +7921,10 @@ internal fun queueRestoreAt(index: Int, size: Int): Int = index.coerceIn(0, size
 
 /** “下一首播放”插入一首不在队列里的歌：插到当前第 [current] 首后面；当前位置无效时接在队尾。 */
 internal fun queueInsertNextAt(current: Int, size: Int): Int = if (current in 0 until size) current + 1 else size
+
+/** 收藏写平台时优先用歌曲原本所属的平台，实际取流源只负责播放。 */
+internal fun favoriteSourceSong(song: Song, currentSong: Song?, primarySong: Song?): Song =
+    if (currentSong?.key == song.key && primarySong != null) primarySong else song
 
 /** 收藏写平台失败时给用户看的原因；平台自带的错误信息优先，避免都落成同一句通用提示。 */
 internal fun favoriteFailureReason(error: Exception): String = when ((error as? PlaylistWriteException)?.failure) {

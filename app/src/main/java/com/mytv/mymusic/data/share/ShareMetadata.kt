@@ -169,6 +169,20 @@ internal data class ShareListItem(
 internal fun shareCoverHash(cover: ByteArray): String =
     MessageDigest.getInstance("SHA-256").digest(cover).joinToString("") { "%02x".format(it) }
 
+/**
+ * 音频文件后缀 → 上传用的 Content-Type。服务端按白名单校验，认不出的一律按 mp3 发，
+ * 免得因为一个奇怪的后缀被 415 挡在门外。
+ */
+internal fun shareMediaType(audioPath: String): String =
+    when (audioPath.substringAfterLast('.', "").lowercase()) {
+        "aac" -> "audio/aac"
+        "flac" -> "audio/flac"
+        "m4a", "mp4" -> "audio/mp4"
+        "ogg", "opus" -> "audio/ogg"
+        "wav" -> "audio/wav"
+        else -> "audio/mpeg"
+    }
+
 /** 一次发布用的幂等键：16 字节随机 hex，满足服务端 `^[\w-]{8,128}$`。 */
 internal fun newShareIdempotencyKey(): String {
     val bytes = ByteArray(16)

@@ -215,7 +215,7 @@ private data class ShareErrorBody(val error: String = "")
 
 private val JSON_MEDIA_TYPE = "application/json".toMediaType()
 
-private val shareJson = Json {
+internal val shareJson = Json {
     ignoreUnknownKeys = true
     // 默认值（含 null）不写进请求体：整曲模式不能携带片段字段，否则服务端判 invalid_metadata
     encodeDefaults = false

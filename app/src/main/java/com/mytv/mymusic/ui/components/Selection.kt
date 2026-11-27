@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -145,19 +144,25 @@ fun SelectionBar(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                 )
-                Spacer(Modifier.weight(1f))
-                TextButton(onToggleAll, modifier = Modifier.tvFocusRing(RoundedCornerShape(20.dp))) {
-                    Text(if (allSelected) "清除" else "全选")
-                }
-                TextButton(onPlay, enabled = count > 0, modifier = Modifier.tvFocusRing(RoundedCornerShape(20.dp))) {
-                    Text("播放")
-                }
-                TextButton(
-                    onClick = { onPlayNext(); onExit() },
-                    enabled = count > 0,
-                    modifier = Modifier.tvFocusRing(RoundedCornerShape(20.dp)),
+                // 电视和平板左栏只有 300dp 左右：这组操作整块换行，别把「下一首播放」拆成两行字
+                FlowRow(
+                    Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.End,
+                    itemVerticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("下一首播放")
+                    TextButton(onToggleAll, modifier = Modifier.tvFocusRing(RoundedCornerShape(20.dp))) {
+                        Text(if (allSelected) "清除" else "全选")
+                    }
+                    TextButton(onPlay, enabled = count > 0, modifier = Modifier.tvFocusRing(RoundedCornerShape(20.dp))) {
+                        Text("播放")
+                    }
+                    TextButton(
+                        onClick = { onPlayNext(); onExit() },
+                        enabled = count > 0,
+                        modifier = Modifier.tvFocusRing(RoundedCornerShape(20.dp)),
+                    ) {
+                        Text("下一首播放", maxLines = 1)
+                    }
                 }
             }
             // 第二行：次要操作靠左，主操作占满剩余宽度，避免单按钮悬在一角显得对不齐

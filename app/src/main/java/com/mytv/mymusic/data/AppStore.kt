@@ -280,6 +280,7 @@ class SettingsStore(private val context: Context) {
     private val layoutModeKey = stringPreferencesKey("layout_mode")
     private val cookiesKey = stringPreferencesKey("cookies")
     private val cookieUpdatedAtKey = stringPreferencesKey("cookie_updated_at")
+    private val favoriteSyncKey = stringPreferencesKey("favorite_sync")
     private val sodaSignerUrlKey = stringPreferencesKey("soda_signer_url")
     private val sodaSignerTokenKey = stringPreferencesKey("soda_signer_token")
     private val sodaSignerEnabledKey = booleanPreferencesKey("soda_signer_enabled")
@@ -384,6 +385,7 @@ private val syncSizeLimitKey = intPreferencesKey("sync_size_limit_mb")
             layoutMode = values[layoutModeKey] ?: "Auto",
             cookies = runCatching { json.decodeFromString<Map<String, String>>(values[cookiesKey] ?: "{}") }
                 .getOrDefault(emptyMap()),
+            favoriteSync = favoriteSyncPreferences(values[favoriteSyncKey]),
             sodaSignerUrl = values[sodaSignerUrlKey] ?: "",
             sodaSignerToken = values[sodaSignerTokenKey] ?: "",
             sodaSignerEnabled = values[sodaSignerEnabledKey] ?: true,
@@ -701,6 +703,25 @@ suspend fun syncSizeLimitMb(value: Int) = context.dataStore.edit {
         it[metadataFallbackKey] = enabled
     }
 
+    private fun favoriteSyncPreferences(raw: String?): Map<String, FavoriteSyncPreference> =
+        runCatching { json.decodeFromString<Map<String, FavoriteSyncPreference>>(raw ?: "{}") }.getOrDefault(emptyMap())
+
+    suspend fun saveFavoriteSync(provider: String, preference: FavoriteSyncPreference): Boolean {
+        var saved = false
+        context.dataStore.edit { values ->
+            if (preference.mode == FavoriteSyncMode.Playlist) {
+                val cookies = runCatching { json.decodeFromString<Map<String, String>>(values[cookiesKey] ?: "{}") }
+                    .getOrDefault(emptyMap())
+                if (!preference.matches(cookies[provider].orEmpty())) return@edit
+            }
+            val current = favoriteSyncPreferences(values[favoriteSyncKey])
+            val updated = if (preference.mode == FavoriteSyncMode.Default) current - provider else current + (provider to preference)
+            values[favoriteSyncKey] = json.encodeToString(updated)
+            saved = true
+        }
+        return saved
+    }
+
     suspend fun cookie(provider: String, cookie: String) = context.dataStore.edit {
         val current = runCatching {
             json.decodeFromString<Map<String, String>>(it[cookiesKey] ?: "{}")
@@ -837,6 +858,7 @@ data class AppSettings(
     /** 界面布局：Auto / Phone / Tablet / Tv。 */
     val layoutMode: String = "Auto",
     val cookies: Map<String, String> = emptyMap(),
+    val favoriteSync: Map<String, FavoriteSyncPreference> = emptyMap(),
     /**
      * 汽水签名器（sodam / libmssdk 的 /sign 协议）。地址和 Token 留空表示用内置的
      * SodaM 公共签名服务；[sodaSignerEnabled] 关掉后只用公开试听流。
@@ -1142,6 +1164,8 @@ interface MusicDao {
     fun songs(bucket: String): Flow<List<SavedSong>>
     @Query("SELECT * FROM saved_songs WHERE bucket = :bucket ORDER BY updatedAt DESC")
     suspend fun songsOnce(bucket: String): List<SavedSong>
+    @Query("SELECT * FROM saved_songs WHERE bucket = :bucket AND key = :key")
+    suspend fun savedSong(bucket: String, key: String): SavedSong?
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun save(song: SavedSong)
     @Query("DELETE FROM saved_songs WHERE key = :key AND bucket = :bucket") suspend fun remove(bucket: String, key: String)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveTombstone(tombstone: SavedSongTombstone)
@@ -1149,6 +1173,8 @@ interface MusicDao {
     suspend fun clearTombstone(bucket: String, key: String)
     @Query("SELECT * FROM saved_song_tombstones WHERE bucket = :bucket")
     suspend fun tombstones(bucket: String): List<SavedSongTombstone>
+    @Query("SELECT * FROM saved_song_tombstones WHERE bucket = :bucket AND key = :key")
+    suspend fun tombstone(bucket: String, key: String): SavedSongTombstone?
     @Query("SELECT * FROM downloads ORDER BY updatedAt DESC") fun downloads(): Flow<List<DownloadRecord>>
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveDownload(record: DownloadRecord)
     @Query("DELETE FROM downloads WHERE key = :key") suspend fun deleteDownload(key: String)

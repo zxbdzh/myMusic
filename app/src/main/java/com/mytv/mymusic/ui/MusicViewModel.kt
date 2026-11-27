@@ -7203,7 +7203,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 Uri.parse(url).path?.let { File(it).extension }.orEmpty(),
                 song.ext,
             ).firstOrNull { it.isNotBlank() }?.lowercase() ?: "mp3"
-            return preparer.prepare(url, extension, com.mytv.mymusic.data.native.BilibiliCdn.headers(url))
+            return preparer.prepare(url, extension, shareDownloadHeaders(url))
         }
         return try {
             attempt()
@@ -7214,6 +7214,13 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             attempt()
         }
     }
+
+    /**
+     * 分享下载要补的请求头：B 站的音频 CDN 不带 Referer + 浏览器 UA 会直接 403，
+     * 这里和正常下载共用同一份规则。
+     */
+    private fun shareDownloadHeaders(url: String): Map<String, String> =
+        com.mytv.mymusic.data.native.BilibiliCdn.headers(url)
 
     /** 分享要用的取流地址：发布时下载它，片段编辑页试听也直接播它（不落盘）。 */
     suspend fun shareAudioUrl(song: Song, onProvider: (String) -> Unit = {}): String {

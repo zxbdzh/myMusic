@@ -15,7 +15,7 @@ import java.util.Locale
  */
 object AppLog {
     /** 这些 tag 同时写到 logcat，方便 `adb logcat -s` 直接盯自定义音源的整条链路。 */
-    private val LOGCAT_TAGS = setOf("LxSources", "SourceResolver", "Player")
+    private val LOGCAT_TAGS = setOf("LxSources", "SourceResolver", "Player", "ShareAudioPreparer")
 
     private const val MAX_ENTRIES = 800
     private const val MAX_MESSAGE = 2_000
@@ -97,3 +97,4 @@ internal fun redact(text: String): String = text
         }
     }
 }
+

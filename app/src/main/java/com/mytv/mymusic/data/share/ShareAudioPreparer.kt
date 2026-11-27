@@ -2,6 +2,7 @@ package com.mytv.mymusic.data.share
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
+import com.mytv.mymusic.AppLog
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -43,6 +44,9 @@ internal class ShareAudioPreparer(
     ): File = runInterruptible(Dispatchers.IO) {
         directory.mkdirs()
         val target = File.createTempFile("share-", ".${extension.ifBlank { "bin" }}", directory)
+        // 失败时要能报出读到多少，所以放在 try 外面
+        var written = 0L
+        var total = -1L
         try {
             // 防盗链的源（例如 B 站 CDN）必须和正常下载带同一套请求头，否则直接 403
             val request = Request.Builder().url(url).apply {
@@ -53,9 +57,6 @@ internal class ShareAudioPreparer(
             } catch (error: IOException) {
                 throw SharePrepareException(SharePrepareFailure.Io, "下载音频失败：${error.message}", error)
             }
-            var written = 0L
-            // 总长提到外层：读取结束后要拿它核对有没有被截断
-            var total = -1L
             response.use { body ->
                 if (body.code in REJECTED_CODES) {
                     throw SharePrepareException(SharePrepareFailure.Rejected, "音频地址已失效：HTTP ${body.code}")
@@ -92,6 +93,12 @@ internal class ShareAudioPreparer(
             target
         } catch (error: Exception) {
             target.delete()
+            // 只记主机和已写字节，不把带签名的地址打进日志
+            AppLog.w(
+                "ShareAudioPreparer",
+                "下载失败 host=${url.substringAfter("://").substringBefore("/").substringBefore("?")} " +
+                    "written=$written total=$total 原因=${error.message}",
+            )
             throw error
         }
     }
@@ -101,4 +108,5 @@ internal class ShareAudioPreparer(
         val REJECTED_CODES = setOf(401, 403, 404, 410)
     }
 }
+
 

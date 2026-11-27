@@ -169,3 +169,124 @@ $env:ANDROID_HOME="$env:LOCALAPPDATA\Android\Sdk"
 1. `./gradlew :desktop:run --args="--screenshot=F:/tmp/pc-native-final"`（1440×900 全套 8+ 张）；
 2. `./gradlew :desktop:test`（期望：44+ 用例 0 失败）；
 3. 复测后把本表状态改为「已修（提交号）」，并把 §二/§三 的 FAIL 逐条关闭。
+
+---
+
+## 八、t19 独立复验（2026-11-27 14:10，基于提交 e8b3494 + 队长串行验证）
+
+> 复验口径（按 t20 契约）：**代码存在 / 测试覆盖 / 离屏截图 / 运行时交互实测四类分别登记**，
+> 不把代码检查写成真机通过。本轮 qa2 未启动 Gradle、截图工具或窗口；
+> 截图来自队长串行验证批次 `F:\tmp\pc-native-final-t19`（11 张 1440×900）。
+
+### 8.1 证据分级总表
+
+| 核对项 | 代码存在 | 测试覆盖 | 离屏截图 | 运行时交互实测 |
+| --- | --- | --- | --- | --- |
+| 细滚动条 8dp（B-6） | ✅ 五页接入 + 溢出判断 | ❌ 无专门单测 | ✅ 右缘可见（溢出页） | ❌ 未实测拖动 |
+| tooltip 800ms（B-7） | ✅ 共享按钮内置 + 图标入口 | ❌ 无单测 | ❌ 截图不可 hover | ❌ 未实测计时 |
+| 首屏 ≥18 行（A-1） | ✅ 32dp 行 + 轮播 120dp | ❌ 无布局断言单测 | ✅ 01-charts 19 行 | ❌（离屏渲染 ≠ 真机窗口） |
+| 详情页 ≥18 行 | ✅ 同上 | ❌ | ✅ 09/10 各 24 行 | ❌ |
+| 轮播播放对应榜单 | ✅ playChart → chartTracks | ❌ 无单测 | ❌ 截图不能验证播放 | ❌ 未实测出声/队列 |
+| 右键菜单项 | ✅ 6 项（1 禁用 2 降级） | ❌ | ✅ 代码 | ❌ 未实测弹菜单 |
+| 核心布局可追溯 Android | ✅ 见 8.6 | — | — | — |
+
+### 8.2 A-1 行数复核（按「完整可见行」）
+
+| 截图 | 页面 | 实测完整行 | 结论 |
+| --- | --- | --- | --- |
+| `01-charts.png` | 榜单首页（热门单曲列表） | **19 行完整**（第 20 行被裁） | 距 t19 自报「20 行」差 1（把裁切算入）；≥18 ✅ |
+| `09-collection.png` | 榜单详情（飙涨榜 100 首） | **24 行完整**（第 25 裁切） | ✅ |
+| `10-playlist-detail.png` | 歌单详情（209 首） | **24 行完整**（第 25 裁切） | ✅ |
+| `04-library.png` | 我的 | 21 行（t18 实测；t19 未改行高） | ✅ |
+
+**重要限定**：`01-charts` 的 19 行是在**截图专用 fixture** 下取得的——
+`Main.kt` 的 `AcceptanceCatalog` 把 `charts()` 的 hotSongs 补齐到 24 条（真实 `hotSongs` 不足 24 时用 `DemoFixtures` 填充），
+仅作用于 `DenseCharts` 截图场景，**生产路径仍是 `CoreMusicCatalog`**（代码已确认）。
+因此「19 行」证明的是**布局上限**；真实数据量不足 24 条时可见行数会按比例减少（榜单 100 首的详情页不受影响）。
+`11-search-dense.png` 同理是演示数据，只能证明布局容量，不能作为真实搜索密度证据。
+
+### 8.3 B-6 细滚动条：接入成立，运行时未验证
+
+- **溢出才显示** ✅：五页统一 `if (listState.canScrollBackward || listState.canScrollForward) { PcVerticalScrollbar(...) }`
+  （`ChartsPage:174`、`CollectionPage:190`、`LibraryPage:193`、`PlaylistsPage:129`、`SearchPage:308`）。
+- **8dp / hover 12dp** ✅：`DESKTOPInteraction.kt:350-351`（`BASE=8`、`HOVER=12`）+ `animateDpAsState(120ms)`。
+- **可拖** ✅（Foundation `VerticalScrollbar` 的组件能力；thumb 拖动未实测）。
+- **缺口**：播放页「接下来播放」队列列表、右侧窗格队列**未接**滚动条（`PlayerPage.kt`/`NowPlayingPane.kt` 无 `PcVerticalScrollbar`）；
+  无单测（依赖 Compose 行为）；拖动与 hover 加粗的运行时表现未验证。
+
+### 8.4 B-7 tooltip：接入成立，运行时未验证
+
+- `RoundIconButton` 内置 `.pcTooltip(label)`（`Expressive.kt:202`）——迷你条/播放页所有图标按钮自动获得提示，
+  且 label 与动作一致（上一首/下一首/返回/更多/全屏歌词/展开歌词/收起歌词/播放队列）。
+- `PlayPauseButton` 内置 `.pcTooltip(if (playing) "暂停" else "播放")`（`Expressive.kt:158`）。
+- 页面级图标入口：`ChartsPage:217`（行内播放/暂停）、`ChartsPage:309`（「播放{榜单名}」）、
+  `CollectionPage:104`（返回）、`SearchPage:153`（清除搜索）。
+- 默认延迟 800ms（`DesktopInteraction.kt:270`），符合契约。
+- **缺口**：无单测；800ms 计时与宿主定位未实测。
+
+### 8.5 重点一：轮播播放是否真的播放所选榜单
+
+✅ **代码路径正确**：
+`ChartsPage:122 onPlay = store::playChart`
+→ `DefaultMusicStore:149 playChart(chart)`：`catalog.chartTracks(chart)` 取**该榜单的曲目队列**
+→ `playback.play(tracks.first(), tracks)`；空榜单有 `notice = "榜单「X」暂无可播放曲目"` 兜底。
+**不是播「热门单曲」区域**，行为与 Android `ChartsScreen.kt:488`（「播放全部」→ `actions.playChart(chart)`）同名同义。
+**限定**：运行时出声与队列顺序未实测（截图无法证明播放行为），需真实窗口或 CLI 驱动后确认。
+
+### 8.6 重点二：右键禁用项未被误计为已交付
+
+`trackMenuActions`（`Metrics.kt:317-330`）实际 6 项：
+
+| 菜单项 | 状态 | 是否计入交付 |
+| --- | --- | --- |
+| 播放 | 可用 | ✅ |
+| 下一首播放 | 可用 | ✅ |
+| **加入歌单** | **`enabled = false`**（注释「t2b：本地歌单库接线后启用」） | ❌ **未交付**（禁用态占位） |
+| 查看歌手 | 可用但降级：`navigate(Search)` + 搜歌手名，不是歌手页 | ⚠️ 降级 |
+| 喜欢 / 取消喜欢 | 可用 | ✅ |
+| 复制链接 | 可用但降级：复制 `provider:trackId`，非平台链接 | ⚠️ 降级 |
+
+**修正 t18 表述**：B-3 不应记「6 项 PASS」，应记**「可用 4 项 + 降级 1 项（查看歌手，同时复制链接降级）/ 禁用 1 项」**，
+禁用与降级项需在功能矩阵（FEATURE-PARITY）中保持「未完全交付」。
+
+### 8.7 核心布局/行为可追溯到 Android
+
+| PC 现状 | Android 源头 | 追溯结论 |
+| --- | --- | --- |
+| 列表行 32dp（`Metrics.row`） | `app/.../ui/components/Lists.kt:140` `heightIn(min = 64.dp)` | 触摸最小 64dp → 鼠标精度下 32dp，理由见 `UI-METRICS.md §5` |
+| 四入口导航（榜单/歌单/搜索/我的） | Android `TopTab`（t4 已对照） | 同名同序 |
+| 详情页列头 标题/歌手/专辑/时长 | `Lists.kt` 行结构（rank/cover/title/artist/album/duration） | 结构一致，PC 改表格列头 |
+| 榜单「播放全部」 | `ChartsScreen.kt:488` `actions.playChart(chart)` | PC `playChart` 同名同义（见 8.5） |
+| 轮播 320×120 / 详情 64dp 封面 | Android 平板 400×248 / 大卡（`screenshots/tablet.png`） | PC 压缩，非凭空取值 |
+
+### 8.8 剩余仍需验收的问题（t20 结论）
+
+1. **运行时交互实测全部缺失**（滚动条拖动、tooltip 计时、右键弹层、双击/多选、轮播播放出声与队列）——
+   需要一次真实窗口或 CLI 驱动验证；本机要求不抢焦点，建议由 captain 决定是否有窗口内自动化手段。
+2. **`01-charts` 行数依赖截图 fixture**（24 条填充）：需用真实 `hotSongs` 数据复核一次（若平台返回 <18 条，
+   该页应按「数据量」而非布局判定）。
+3. **播放页/窗格的队列列表未接滚动条**（B-6 的次级列表缺口）。
+4. 列表内键盘导航 ↑↓/Enter 与 Tab 焦点环（t18 遗留，转 Sol）。
+5. 高 DPI（125%/150%）与 Alt+Tab 切回未测。
+6. 右键「加入歌单」禁用、「查看歌手/复制链接」降级——保持「未完全交付」标注。
+7. `11-search-dense.png` 为演示数据，真实搜索密度待多结果平台（kugou/migu）复测。
+
+### 8.9 本轮结论
+
+- **B-6 / B-7 由 FAIL 转「已接入（代码+截图/组件能力），待运行时实测」**；
+- **A-1 关闭**：首页 19、详情 24、歌单详情 24、我的 21，均 ≥18（首页附 fixture 限定）；
+- **B-3 修正为「部分交付」**：6 项中 1 项禁用、2 项降级；
+- 契约 23 条：**代码/离屏证据层 22 PASS + 1 部分（B-3）**；运行时时序类证据 0 项完成，已列入 8.8。
+- **边界声明**：本轮只覆盖 PC 原生手感（密度/交互/装饰/播放侧）与 t19 收尾项，**不代表 Android 功能对齐度**；
+  功能覆盖以 `docs/pc/FEATURE-PARITY.md`（156 条）为准，不因本轮通过而提升，也不把本轮写成「Android 功能已对齐」。
+
+### 8.10 可见缺陷（本轮保留，不修复）
+
+| 缺陷 | 表现 | 位置/原因 | 影响 |
+| --- | --- | --- | --- |
+| 离屏 TextField 中文豆腐块 | `03-search.png` 搜索框输入文字为方块（同页结果行普通 `Text` 正常） | `ImageComposeScene` 离屏渲染下 `BasicTextField` 拿不到中文 fallback；已试显式 `TextStyle` 无效 | 仅影响离屏截图；真实窗口需人工确认一次（本轮不开窗） |
+| 占位封面（渐变色块） | `01-charts.png` 右侧「更多榜单」9 张卡为纯渐变色块；轮播卡为渐变 + 大首字 | `CoverArt` 程序化生成（id 哈希色相），Coil 未接入 | 非真实封面；歌单页与播放窗格的封面是真实 CDN 图 |
+| 搜索密度证据为演示数据 | `11-search-dense.png` 用 `DemoFixtures` 填充 | `AcceptanceCatalog` 仅作用于 `DenseSearch` 截图场景 | 只能证明布局容量，不能证明真实搜索密度 |
+
+**行数口径说明**：`01-charts` 队长口头读数 20 行，看图核对为 **19 行完整 + 第 20 行底部裁切**；
+按「完整可见行」口径记 19（裁切行不计），仍 ≥18 达标。详情两页 24 行完整、我的 21 行均为完整行。

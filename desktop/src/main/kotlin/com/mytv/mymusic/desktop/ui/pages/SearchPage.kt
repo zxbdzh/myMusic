@@ -12,12 +12,15 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -56,6 +59,8 @@ import com.mytv.mymusic.desktop.theme.SourceTag
 import com.mytv.mymusic.desktop.theme.trackMenuActions
 import com.mytv.mymusic.desktop.ui.components.AppIcon
 import com.mytv.mymusic.desktop.ui.components.AppIconView
+import com.mytv.mymusic.desktop.ui.components.PcVerticalScrollbar
+import com.mytv.mymusic.desktop.ui.components.pcTooltip
 import com.mytv.mymusic.desktop.ui.components.EmptyState
 import com.mytv.mymusic.desktop.ui.components.ErrorBanner
 import com.mytv.mymusic.desktop.ui.components.SkeletonRow
@@ -99,12 +104,15 @@ fun SearchPage(state: MusicUiState, store: MusicStore) {
         if (ascending) sorted else sorted.reversed()
     }
     val rowIds = remember(rows) { rows.map { it.id } }
+    val listState = rememberLazyListState()
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = Metrics.pagePadding,
-        verticalArrangement = Arrangement.spacedBy(Metrics.gapSmall),
-    ) {
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = Metrics.pagePadding,
+            verticalArrangement = Arrangement.spacedBy(Metrics.gapSmall),
+        ) {
         item { PcPageHeader(title = "搜索", subtitle = "跨平台聚合 · 当前 ${state.providerName}") }
         item {
             OutlinedTextField(
@@ -141,7 +149,8 @@ fun SearchPage(state: MusicUiState, store: MusicStore) {
                             Modifier
                                 .size(Metrics.iconButton)
                                 .clip(RoundedCornerShape(percent = 50))
-                                .clickable(onClick = store::clearSearch),
+                                .clickable(onClick = store::clearSearch)
+                                .pcTooltip("清除搜索"),
                             contentAlignment = Alignment.Center,
                         ) {
                             AppIconView(AppIcon.Close, MaterialTheme.colorScheme.onSurfaceVariant, size = Metrics.iconSmall)
@@ -293,6 +302,13 @@ fun SearchPage(state: MusicUiState, store: MusicStore) {
                     )
                 }
             }
+        }
+        }
+        if (listState.canScrollBackward || listState.canScrollForward) {
+            PcVerticalScrollbar(
+                adapter = rememberScrollbarAdapter(listState),
+                modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+            )
         }
     }
 }

@@ -154,7 +154,8 @@ fun PlayPauseButton(
             .background(container)
             .hoverable(interaction)
             .pointerHoverIcon(PointerIcon.Hand)
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .pcTooltip(if (playing) "暂停" else "播放"),
         contentAlignment = Alignment.Center,
     ) {
         AnimatedContent(
@@ -197,7 +198,8 @@ fun RoundIconButton(
             .background(container)
             .hoverable(interaction)
             .pointerHoverIcon(PointerIcon.Hand)
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .pcTooltip(label),
         contentAlignment = Alignment.Center,
     ) {
         AppIconView(

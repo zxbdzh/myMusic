@@ -176,6 +176,8 @@ data class CollectionUiState(
     val title: String = "",
     val subtitle: String = "",
     val source: String = "",
+    /** 详情页头部封面（榜单 / 歌单的 coverUrl），空则回落到程序化封面。 */
+    val coverUrl: String = "",
     val tracks: List<Track> = emptyList(),
     val loading: Boolean = false,
     val error: String = "",

@@ -3,8 +3,8 @@ package com.mytv.mymusic.desktop.ui.components
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.ScrollbarAdapter
 import androidx.compose.foundation.ScrollbarStyle
+import androidx.compose.foundation.v2.ScrollbarAdapter
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.hoverable

@@ -60,6 +60,7 @@ import com.mytv.mymusic.desktop.state.Route
 import com.mytv.mymusic.desktop.state.Track
 import com.mytv.mymusic.desktop.ui.components.AppIcon
 import com.mytv.mymusic.desktop.ui.components.AppIconView
+import com.mytv.mymusic.desktop.ui.components.pcTooltip
 
 /**
  * PC 原生尺寸体系（t15）。
@@ -82,7 +83,7 @@ object Metrics {
     val tag = 12.sp
     val cardTitle = 13.sp
     val sectionTitle = 15.sp
-    val pageTitle = 22.sp
+    val pageTitle = 20.sp
     /** 键值数字（榜单序号、时长）等宽感更强。 */
     val number = 12.sp
 
@@ -93,15 +94,15 @@ object Metrics {
     val rowCover = 48.dp
 
     // ---- 网格 / 卡片 ----
-    val gridCover = 168.dp
+    val gridCover = 160.dp
     val carouselW = 320.dp
-    val carouselH = 180.dp
+    val carouselH = 120.dp
     val moreChartH = 100.dp
     /** 卡片底部文案区留白。 */
     val cardTextGap = 6.dp
 
     // ---- 间距 ----
-    val pageH = 20.dp
+    val pageH = 16.dp
     val pageV = 16.dp
     val sectionGap = 12.dp
     val gap = 8.dp
@@ -435,6 +436,8 @@ fun PcRow(
             ) {
                 menuActions.forEach { action ->
                     DropdownMenuItem(
+                        // M3 默认项高 48dp，PC 的右键菜单要 30dp（清单 I-03：28–32dp）
+                        modifier = Modifier.height(30.dp),
                         text = {
                             Text(
                                 action.label,

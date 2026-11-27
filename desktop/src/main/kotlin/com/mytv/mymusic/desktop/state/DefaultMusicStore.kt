@@ -146,6 +146,17 @@ class DefaultMusicStore(
         }
     }
 
+    override fun playChart(chart: ChartSummary) {
+        scope.launch {
+            val tracks = runCatching { catalog.chartTracks(chart) }.getOrElse {
+                _state.update { state -> state.copy(notice = it.readable("榜单播放失败")) }
+                return@launch
+            }
+            tracks.firstOrNull()?.let { playback.play(it, tracks) }
+                ?: _state.update { it.copy(notice = "榜单「${chart.name}」暂无可播放曲目") }
+        }
+    }
+
     override fun openChart(chart: ChartSummary) {
         _state.update {
             it.copy(
@@ -154,6 +165,7 @@ class DefaultMusicStore(
                     title = chart.name,
                     subtitle = chart.subtitle,
                     source = "榜单",
+                    coverUrl = chart.coverUrl,
                     loading = true,
                 ),
             )
@@ -199,6 +211,7 @@ class DefaultMusicStore(
                     title = playlist.name,
                     subtitle = if (playlist.trackCount > 0) "${playlist.trackCount} 首 · ${playlist.curator}" else playlist.curator,
                     source = "歌单",
+                    coverUrl = playlist.coverUrl,
                     loading = true,
                 ),
             )

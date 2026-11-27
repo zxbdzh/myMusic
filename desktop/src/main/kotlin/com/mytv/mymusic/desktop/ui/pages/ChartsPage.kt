@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -19,6 +20,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -53,6 +56,8 @@ import com.mytv.mymusic.desktop.theme.hoverLift
 import com.mytv.mymusic.desktop.theme.trackMenuActions
 import com.mytv.mymusic.desktop.ui.components.AppIcon
 import com.mytv.mymusic.desktop.ui.components.AppIconView
+import com.mytv.mymusic.desktop.ui.components.PcVerticalScrollbar
+import com.mytv.mymusic.desktop.ui.components.pcTooltip
 import com.mytv.mymusic.desktop.ui.components.CoverImage
 import com.mytv.mymusic.desktop.ui.components.ErrorBanner
 import com.mytv.mymusic.desktop.ui.components.SkeletonRow
@@ -83,11 +88,14 @@ fun ChartsPage(state: MusicUiState, store: MusicStore) {
     val selection = remember { RowSelection() }
     val songIds = remember(songs) { songs.map { it.id } }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = Metrics.pagePadding,
-        verticalArrangement = Arrangement.spacedBy(Metrics.sectionGap),
-    ) {
+    val listState = rememberLazyListState()
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = Metrics.pagePadding,
+            verticalArrangement = Arrangement.spacedBy(Metrics.sectionGap),
+        ) {
         item {
             PcPageHeader(
                 title = "榜单",
@@ -111,13 +119,14 @@ fun ChartsPage(state: MusicUiState, store: MusicStore) {
                     charts = carousel,
                     provider = state.providerName,
                     onOpen = store::openChart,
+                    onPlay = store::playChart,
                 )
             }
         }
         if (featured != null || more.isNotEmpty()) {
             item {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Metrics.columnGap)) {
-                    Column(Modifier.weight(1.2f), verticalArrangement = Arrangement.spacedBy(Metrics.gapSmall)) {
+                    Column(Modifier.weight(1.2f), verticalArrangement = Arrangement.spacedBy(0.dp)) {
                         PcSectionTitle(featured?.name ?: "热门单曲") {
                             if (songs.isNotEmpty()) {
                                 PcActionButton(
@@ -129,7 +138,7 @@ fun ChartsPage(state: MusicUiState, store: MusicStore) {
                             }
                         }
                         // 一屏 18 行：32dp 行高，不再带封面
-                        songs.take(18).forEachIndexed { index, track ->
+                        songs.take(24).forEachIndexed { index, track ->
                             ChartSongRow(
                                 index = index,
                                 track = track,
@@ -159,6 +168,13 @@ fun ChartsPage(state: MusicUiState, store: MusicStore) {
                     }
                 }
             }
+        }
+        }
+        if (listState.canScrollBackward || listState.canScrollForward) {
+            PcVerticalScrollbar(
+                adapter = rememberScrollbarAdapter(listState),
+                modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+            )
         }
     }
 }
@@ -197,7 +213,8 @@ private fun ChartSongRow(
                 .size(Metrics.iconButton)
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                .clickable { store.playTrack(track, queue) },
+                .clickable { store.playTrack(track, queue) }
+                .pcTooltip(if (state.current?.id == track.id && state.playing) "暂停" else "播放"),
             contentAlignment = Alignment.Center,
         ) {
             AppIconView(
@@ -218,6 +235,7 @@ private fun ChartCarousel(
     charts: List<ChartSummary>,
     provider: String,
     onOpen: (ChartSummary) -> Unit,
+    onPlay: (ChartSummary) -> Unit,
 ) {
     LazyRow(
         horizontalArrangement = Arrangement.spacedBy(Metrics.gap),
@@ -286,7 +304,9 @@ private fun ChartCarousel(
                             Modifier
                                 .size(Metrics.playBadge)
                                 .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primary),
+                                .background(MaterialTheme.colorScheme.primary)
+                                .clickable(onClickLabel = "播放${chart.name}") { onPlay(chart) }
+                                .pcTooltip("播放${chart.name}"),
                             contentAlignment = Alignment.Center,
                         ) {
                             AppIconView(AppIcon.Play, MaterialTheme.colorScheme.onPrimary, size = Metrics.iconSmall)

@@ -110,6 +110,7 @@ interface MusicStore {
     // ---- 榜单 ----
     fun refreshCharts()
     fun openChart(chart: ChartSummary)
+    fun playChart(chart: ChartSummary)
     fun closeCollection()
 
     // ---- 歌手 / 专辑（B2）----

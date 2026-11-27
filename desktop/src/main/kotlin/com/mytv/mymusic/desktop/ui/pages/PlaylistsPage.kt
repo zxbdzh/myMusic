@@ -13,12 +13,15 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -44,6 +47,7 @@ import com.mytv.mymusic.desktop.theme.PcProviderChips
 import com.mytv.mymusic.desktop.theme.PcSectionTitle
 import com.mytv.mymusic.desktop.theme.hoverLift
 import com.mytv.mymusic.desktop.ui.components.AppIcon
+import com.mytv.mymusic.desktop.ui.components.PcVerticalScrollbar
 import com.mytv.mymusic.desktop.ui.components.AppIconView
 import com.mytv.mymusic.desktop.ui.components.CoverImage
 import com.mytv.mymusic.desktop.ui.components.ErrorBanner
@@ -68,11 +72,14 @@ fun PlaylistsPage(state: MusicUiState, store: MusicStore) {
     val playlists = state.playlists
     val cards = if (playlists.category == "全部") playlists.recommended else playlists.categoryPlaylists
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = Metrics.pagePadding,
-        verticalArrangement = Arrangement.spacedBy(Metrics.sectionGap),
-    ) {
+    val listState = rememberLazyListState()
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = Metrics.pagePadding,
+            verticalArrangement = Arrangement.spacedBy(Metrics.sectionGap),
+        ) {
         item {
             PcPageHeader(title = "歌单", subtitle = "${state.providerName} · 编辑推荐与分类") {
                 PcActionButton("刷新", AppIcon.Refresh, store::refreshPlaylists)
@@ -116,6 +123,13 @@ fun PlaylistsPage(state: MusicUiState, store: MusicStore) {
             item {
                 PlaylistGrid(cards = cards, onOpen = { store.openPlaylist(it) })
             }
+        }
+        }
+        if (listState.canScrollBackward || listState.canScrollForward) {
+            PcVerticalScrollbar(
+                adapter = rememberScrollbarAdapter(listState),
+                modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+            )
         }
     }
 }

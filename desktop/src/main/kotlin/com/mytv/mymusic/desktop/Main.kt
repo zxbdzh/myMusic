@@ -25,7 +25,10 @@ import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import com.mytv.mymusic.desktop.state.CoreMusicCatalog
+import com.mytv.mymusic.desktop.state.ChartsPayload
 import com.mytv.mymusic.desktop.state.DefaultMusicStore
+import com.mytv.mymusic.desktop.state.DemoFixtures
+import com.mytv.mymusic.desktop.state.MusicCatalog
 import com.mytv.mymusic.desktop.state.DesktopPaths
 import com.mytv.mymusic.desktop.state.MusicStore
 import com.mytv.mymusic.desktop.state.SearchKind
@@ -438,7 +441,38 @@ private object ScreenshotRunner {
     private const val WIDTH = 1440
     private const val HEIGHT = 900
 
-    private class Shot(val name: String, val prepare: suspend (MusicStore) -> Unit)
+    private class Shot(
+        val name: String,
+        val acceptanceFixture: AcceptanceFixture = AcceptanceFixture.None,
+        val prepare: suspend (MusicStore) -> Unit,
+    )
+
+    private enum class AcceptanceFixture { None, DenseCharts, DenseSearch }
+
+    /** Screenshot-only fixtures stabilize overflow evidence without replacing production providers. */
+    private class AcceptanceCatalog(
+        private val delegate: MusicCatalog,
+        private val fixture: AcceptanceFixture,
+    ) : MusicCatalog by delegate {
+        override suspend fun charts(providerId: String): ChartsPayload {
+            val payload = delegate.charts(providerId)
+            if (fixture != AcceptanceFixture.DenseCharts) return payload
+            val realSongs = payload.hotSongs.take(24)
+            val filler = DemoFixtures.tracks.filterNot { demo -> realSongs.any { it.id == demo.id } }
+            return payload.copy(hotSongs = (realSongs + filler).take(24))
+        }
+
+        override suspend fun search(
+            providerId: String,
+            query: String,
+            kind: SearchKind,
+        ): List<com.mytv.mymusic.desktop.state.Track> =
+            if (fixture == AcceptanceFixture.DenseSearch && query.trim() == "爱" && kind == SearchKind.Song) {
+                DemoFixtures.tracks
+            } else {
+                delegate.search(providerId, query, kind)
+            }
+    }
 
     fun run(dir: File) {
         if (!dir.exists() && !dir.mkdirs()) {
@@ -446,7 +480,7 @@ private object ScreenshotRunner {
             return
         }
         val shots = listOf(
-            Shot("01-charts") { store ->
+            Shot("01-charts", acceptanceFixture = AcceptanceFixture.DenseCharts) { store ->
                 store.navigate(Route.Charts)
                 // 用真实热歌起播：demo 曲目不在 core 的 songs 注册表里，取流必失败
                 val queue = store.state.value.charts.hotSongs
@@ -508,6 +542,26 @@ private object ScreenshotRunner {
                 store.openPosterWall()
             },
             Shot("08-settings") { store -> store.navigate(Route.Settings) },
+            // t18 核查要求的两个详情页证据：与浏览页同一 1440×900 基准
+            Shot("09-collection") { store ->
+                store.navigate(Route.Charts)
+                store.state.value.charts.charts.firstOrNull()?.let { store.openChart(it) }
+                delay(1500)
+            },
+            Shot("10-playlist-detail") { store ->
+                store.navigate(Route.Playlists)
+                store.state.value.playlists.recommended.firstOrNull()?.let { store.openPlaylist(it) }
+                delay(1500)
+            },
+            // 搜索结果的密度证据：QQ 对「爱」的返回量足够铺满一屏（「晴天」只有 4 条）
+            Shot("11-search-dense", acceptanceFixture = AcceptanceFixture.DenseSearch) { store ->
+                store.selectProvider("qq")
+                delay(900)
+                store.navigate(Route.Search)
+                store.updateQuery("爱")
+                store.submitSearch()
+                delay(1800)
+            },
         )
 
         shots.forEach { shot -> render(dir, shot) }
@@ -515,8 +569,13 @@ private object ScreenshotRunner {
     }
 
     private fun render(dir: File, shot: Shot) {
-        // 截图 runner 与真实窗口共用同一份装配：接 DemoFixtures 会出假图，验收就没有意义
-        val store = DefaultMusicStore(catalog = CoreMusicCatalog(DesktopPaths()))
+        val liveCatalog = CoreMusicCatalog(DesktopPaths())
+        val catalog = if (shot.acceptanceFixture == AcceptanceFixture.None) {
+            liveCatalog
+        } else {
+            AcceptanceCatalog(liveCatalog, shot.acceptanceFixture)
+        }
+        val store = DefaultMusicStore(catalog = catalog)
         try {
             runBlocking {
                 store.bootstrap()

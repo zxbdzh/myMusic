@@ -160,13 +160,12 @@ fun SelectionBar(
                     Text("下一首播放")
                 }
             }
-            // 第二行：次要操作靠左，主操作贴右边缘，与第一行操作区右对齐，避免右侧空出一大块
+            // 第二行：次要操作靠左，主操作占满剩余宽度，避免单按钮悬在一角显得对不齐
             Row(
                 Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 FlowRow(
-                    Modifier.weight(1f),
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
                     itemVerticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -188,7 +187,7 @@ fun SelectionBar(
                 Button(
                     onClick = onAddTo,
                     enabled = count > 0,
-                    modifier = Modifier.tvFocusRing(RoundedCornerShape(24.dp)),
+                    modifier = Modifier.weight(1f).tvFocusRing(RoundedCornerShape(24.dp)),
                 ) {
                     Text("加入歌单")
                 }

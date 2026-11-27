@@ -418,9 +418,34 @@ class DefaultMusicStore(
                 catalog.parseLink(_state.value.providerId, link)
             }.getOrNull()
             if (parsed == null) {
-                _state.update { it.copy(notice = "链接解析失败") }
-            } else {
-                _state.update { it.copy(notice = "已解析：${parsed.title}") }
+                _state.update { it.copy(notice = "链接解析失败：未识别的平台链接或接口暂不可用") }
+                return@launch
+            }
+            when (parsed.kind) {
+                "song" -> {
+                    val first = parsed.tracks.firstOrNull()
+                    if (first != null) {
+                        playback.play(first, parsed.tracks)
+                        _state.update { it.copy(notice = "已解析并开始播放《${parsed.title}》") }
+                    } else {
+                        _state.update { it.copy(notice = "已解析《${parsed.title}》，但无曲目信息") }
+                    }
+                }
+                else -> {
+                    _state.update {
+                        it.copy(
+                            route = Route.Playlists,
+                            collection = CollectionUiState(
+                                title = parsed.title.ifBlank { "解析结果" },
+                                subtitle = parsed.subtitle,
+                                source = if (parsed.kind == "album") "专辑" else "歌单",
+                                tracks = parsed.tracks,
+                                loading = false,
+                            ),
+                            notice = "已解析：${parsed.title}（${parsed.tracks.size} 首）",
+                        )
+                    }
+                }
             }
         }
     }

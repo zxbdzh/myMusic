@@ -130,7 +130,7 @@ val stageSmtcBridge by tasks.registering(Copy::class) {
 // MSI 的升级判定依赖版本递增，同版本重装会被拒绝，所以发布任务必须带新版本号。
 // 本地不设环境变量时固定 1.1.0，保证复现与文档一致。
 // ---------------------------------------------------------------------------
-val pcVersion: String = providers.environmentVariable("PC_VERSION").orElse("1.1.0").get()
+val pcVersion: String = providers.environmentVariable("PC_VERSION").orElse("0.0.1").get()
 
 // ---------------------------------------------------------------------------
 // 随包 libVLC（t8）

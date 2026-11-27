@@ -96,7 +96,7 @@ class CoreMusicCatalog(
         }
         return PlaylistsPayload(
             recommended = recommended.map { it.toUi(id) },
-            categories = listOf("全部") + categories.map { it.name }.distinct(),
+            categories = (listOf("全部") + categories.map { it.name }).distinct(),
             byCategory = byCategory.mapValues { (_, list) -> list.map { it.toUi(id) } },
         )
     }

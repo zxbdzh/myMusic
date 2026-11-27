@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -15,8 +16,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -24,11 +28,17 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.mytv.mymusic.core.CoreModule
 import com.mytv.mymusic.desktop.state.MusicStore
 import com.mytv.mymusic.desktop.state.MusicUiState
@@ -42,6 +52,7 @@ import com.mytv.mymusic.desktop.ui.components.AppIconView
 import com.mytv.mymusic.desktop.ui.components.ExpressiveChip
 import com.mytv.mymusic.desktop.ui.components.PageHeader
 import com.mytv.mymusic.desktop.ui.components.PagePadding
+import com.mytv.mymusic.desktop.ui.components.PcVerticalScrollbar
 import com.mytv.mymusic.playback.core.CrossfadeMode
 import com.mytv.mymusic.playback.core.EqPresets
 
@@ -56,11 +67,14 @@ import com.mytv.mymusic.playback.core.EqPresets
 @Composable
 fun SettingsPage(state: MusicUiState, store: MusicStore) {
     val appearance = state.appearance
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PagePadding,
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
+    val listState = rememberLazyListState()
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PagePadding,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
         item { PageHeader(title = "设置", subtitle = "即改即存，没有保存按钮") }
 
         item {
@@ -195,6 +209,10 @@ fun SettingsPage(state: MusicUiState, store: MusicStore) {
         }
 
         item {
+            ProviderCredentialsCard(state, store)
+        }
+
+        item {
             SettingsCard("快捷键") {
                 ShortcutRow("空格", "播放 / 暂停")
                 ShortcutRow("← / →", "快退 / 快进 10 秒")
@@ -207,7 +225,7 @@ fun SettingsPage(state: MusicUiState, store: MusicStore) {
         item {
             SettingsCard("关于") {
                 SettingRow("版本") {
-                    Text("myMusic 1.1.0（PC 骨架）", style = MaterialTheme.typography.bodyMedium)
+                    Text("myMusic 0.0.1（Windows PC 版）", style = MaterialTheme.typography.bodyMedium)
                 }
                 SettingRow("模块") {
                     Text(
@@ -232,6 +250,13 @@ fun SettingsPage(state: MusicUiState, store: MusicStore) {
                     )
                 }
             }
+        }
+        }
+        if (listState.canScrollBackward || listState.canScrollForward) {
+            PcVerticalScrollbar(
+                adapter = rememberScrollbarAdapter(listState),
+                modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+            )
         }
     }
 }
@@ -399,6 +424,83 @@ private fun AudioEffectsCard(store: MusicStore) {
                     selected = timerState.active && timerState.endOfTrack,
                     onClick = timer::stopAfterCurrent,
                 )
+            }
+        }
+    }
+}
+
+/**
+ * 音源账号凭据（DPAPI 加密保险库，落实 Q5）：
+ * 选中平台后可粘贴 Cookie 或一键清除，保存后经 Win32 DPAPI 加密写入 `credentials.dpapi.json`，
+ * 绝不以明文形式留在磁盘。
+ */
+@Composable
+private fun ProviderCredentialsCard(state: MusicUiState, store: MusicStore) {
+    val providers = state.providers.ifEmpty { return }
+    var selectedId by remember(providers) { mutableStateOf(providers.first().id) }
+    var cookieInput by remember(selectedId) { mutableStateOf(store.getProviderCookie(selectedId)) }
+    val hasSaved = store.getProviderCookie(selectedId).isNotBlank()
+
+    SettingsCard("音源账号与凭据（DPAPI 加密）") {
+        SettingRow("选择平台") {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                providers.take(7).forEach { p ->
+                    val saved = store.getProviderCookie(p.id).isNotBlank()
+                    ExpressiveChip(
+                        label = if (saved) "${p.name} ✓" else p.name,
+                        selected = selectedId == p.id,
+                        onClick = { selectedId = p.id },
+                    )
+                }
+            }
+        }
+        SettingRow("Cookie 凭据") {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .height(32.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainer)
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                        .padding(horizontal = 10.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    if (cookieInput.isEmpty()) {
+                        Text(
+                            text = "粘贴该平台 Cookie 后点保存（写入本机 Windows DPAPI 加密库）",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                    }
+                    BasicTextField(
+                        value = cookieInput,
+                        onValueChange = { cookieInput = it },
+                        singleLine = true,
+                        textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                ExpressiveChip(
+                    label = "保存",
+                    selected = true,
+                    onClick = { store.setProviderCookie(selectedId, cookieInput.trim()) },
+                )
+                if (hasSaved || cookieInput.isNotBlank()) {
+                    ExpressiveChip(
+                        label = "清除",
+                        selected = false,
+                        onClick = {
+                            cookieInput = ""
+                            store.setProviderCookie(selectedId, "")
+                        },
+                    )
+                }
             }
         }
     }

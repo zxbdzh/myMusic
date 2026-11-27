@@ -7,18 +7,23 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -27,6 +32,7 @@ import com.mytv.mymusic.desktop.state.MusicStore
 import com.mytv.mymusic.desktop.state.MusicUiState
 import com.mytv.mymusic.desktop.state.Route
 import com.mytv.mymusic.desktop.theme.DesktopTheme
+import com.mytv.mymusic.desktop.ui.components.DockPrefs
 import com.mytv.mymusic.desktop.ui.pages.ChartsPage
 import com.mytv.mymusic.desktop.ui.pages.LibraryPage
 import com.mytv.mymusic.desktop.ui.pages.LyricsPage
@@ -38,49 +44,74 @@ import com.mytv.mymusic.desktop.ui.pages.SettingsPage
 import kotlinx.coroutines.delay
 
 /**
- * 主窗口外壳。
+ * PC 原生主窗口外壳（ADR-0001 / Q1=1A + Q7）：
  *
- * 结构 = 左导航 + 内容区 + 底部迷你播放条 + 三层覆盖（播放页 / 全屏歌词 / 海报墙）。
- * 和 Android `MyMusicApp` 的对应关系：
- *  - 导航 = `TopTab` + `NavHost`（桌面不用导航库，一个 enum 足够，返回栈由各页自己管）；
- *  - 迷你播放条 = 平板 `BottomPlayerBar`；
- *  - 播放页 / 歌词 / 海报墙 = 那三个 `AnimatedVisibility` 覆盖层；
- *  - Snackbar = 底部一条浮动提示（[NoticeHost]）。
- *
- * 覆盖层用 `AnimatedVisibility` 而不是 `Crossfade`：进入/退出都只是淡入淡出，
- * 播放页里的大封面不会跟着缩放（缩放会让程序化封面重绘，视觉上像在抖）。
+ * ```
+ * ┌─────────────────────────────────────────────────────────────┐
+ * │ PcTopBar (42dp：返回/刷新 + 全局搜索/链接解析 + 状态/抽屉)     │
+ * ├──────────────┬────────────────────────────────┬─────────────┤
+ * │ AppNavRail   │ RouteBody                      │ NowPlaying  │
+ * │ (200dp 横排  │ (高密度内容区，吃满剩余宽度)     │ Pane (按需  │
+ * │  + 歌单树)   │                                │ 240-480dp)  │
+ * ├──────────────┴────────────────────────────────┴─────────────┤
+ * │ MiniPlayerBar (64dp 常驻完整播放控制栏)                       │
+ * └─────────────────────────────────────────────────────────────┘
+ * ```
+ * 覆盖层（海报墙 / 播放页 / 全屏歌词）保持淡入淡出，避免缩放抖动。
  */
 @Composable
 fun AppShell(store: MusicStore) {
     val state by store.state.collectAsState()
+    val history = remember { mutableStateListOf(Route.Charts) }
+
+    LaunchedEffect(state.route) {
+        if (history.lastOrNull() != state.route) {
+            history.add(state.route)
+            if (history.size > 20) history.removeAt(0)
+        }
+    }
+
     DesktopTheme(state.appearance) {
         Box(
             Modifier
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.surface),
         ) {
-            // 宽度分档跟 Android 平板一致：≥1200dp 右侧常驻 380dp 播放窗格，
-            // 更窄时退回底部播放条（840–1199dp 在 Android 上也是底部条）。
-            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
-                val wide = maxWidth >= 1200.dp
-                Row(Modifier.fillMaxSize()) {
-                    AppNavRail(
-                        current = state.route,
-                        engineReady = state.engine.ready,
-                        onSelect = store::navigate,
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val allowRightDrawer = maxWidth >= 1080.dp && !DockPrefs.collapsed
+                val dividerColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+
+                Column(Modifier.fillMaxSize()) {
+                    PcTopBar(
+                        state = state,
+                        store = store,
+                        canGoBack = history.size > 1,
+                        onBack = {
+                            if (history.size > 1) {
+                                history.removeAt(history.lastIndex)
+                                store.navigate(history.last())
+                            }
+                        },
                     )
-                    Column(Modifier.weight(1f).fillMaxHeight()) {
-                        Box(Modifier.weight(1f)) {
+                    HorizontalDivider(color = dividerColor)
+
+                    Row(Modifier.weight(1f).fillMaxSize()) {
+                        AppNavRail(state = state, store = store)
+                        VerticalDivider(color = dividerColor)
+                        Box(Modifier.weight(1f).fillMaxHeight()) {
                             RouteBody(state = state, store = store)
                         }
-                        // 宽屏时右侧窗格已经承担了播放控制，不再叠一条底部条
-                        if (!wide) MiniPlayerBar(state = state, store = store)
+                        if (allowRightDrawer) {
+                            NowPlayingPane(state = state, store = store)
+                        }
                     }
-                    if (wide) NowPlayingPane(state = state, store = store)
+
+                    HorizontalDivider(color = dividerColor)
+                    MiniPlayerBar(state = state, store = store)
                 }
             }
 
-            // 覆盖层顺序即层级：海报墙在最下（从播放页可以盖到墙上），歌词在最上
+            // 覆盖层顺序即层级：海报墙在最下，歌词在最上
             AnimatedVisibility(
                 visible = state.posterOpen,
                 enter = fadeIn(tween(160)),
@@ -121,8 +152,8 @@ private fun RouteBody(state: MusicUiState, store: MusicStore) {
 }
 
 /**
- * 底部浮动提示：播放失败、收藏成功、取流降级这类一次性消息。
- * 3.6 秒后自动消失；再次出现同一条消息时（text 变了）重新计时。
+ * 底部浮动提示：播放失败、换源提示、收藏成功这类一次性消息。
+ * 位于 64dp 常驻底栏上方，不压住控制条。
  */
 @Composable
 private fun BoxScope.NoticeHost(state: MusicUiState, store: MusicStore) {
@@ -136,7 +167,7 @@ private fun BoxScope.NoticeHost(state: MusicUiState, store: MusicStore) {
     Row(
         Modifier
             .align(Alignment.BottomCenter)
-            .padding(bottom = 104.dp)
+            .padding(bottom = 80.dp)
             .clip(RoundedCornerShape(percent = 50))
             .background(MaterialTheme.colorScheme.inverseSurface)
             .padding(horizontal = 18.dp, vertical = 10.dp),

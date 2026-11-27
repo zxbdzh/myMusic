@@ -97,7 +97,8 @@ object DockPrefs {
     )
         private set
 
-    var collapsed: Boolean by mutableStateOf(props.getProperty("collapsed")?.toBooleanStrictOrNull() ?: false)
+    // Q1=1A：底部常驻 64dp 完整播放控制栏，右侧抽屉首次启动默认收起，按需随时展开
+    var collapsed: Boolean by mutableStateOf(props.getProperty("collapsed")?.toBooleanStrictOrNull() ?: true)
         private set
 
     var playMode: PanePlayMode by mutableStateOf(

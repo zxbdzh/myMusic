@@ -236,6 +236,12 @@ fun NowPlayingPane(state: MusicUiState, store: MusicStore) {
                         },
                         onClick = {
                             DockPrefs.selectPlayMode(mode)
+                            val mapped = when (mode) {
+                                PanePlayMode.Single -> com.mytv.mymusic.desktop.state.usecase.PlayMode.Single
+                                PanePlayMode.Shuffle, PanePlayMode.Heart -> com.mytv.mymusic.desktop.state.usecase.PlayMode.Shuffle
+                                PanePlayMode.Sequential -> com.mytv.mymusic.desktop.state.usecase.PlayMode.Sequence
+                            }
+                            store.setPlayMode(mapped)
                             menuOpen = false
                         },
                     )

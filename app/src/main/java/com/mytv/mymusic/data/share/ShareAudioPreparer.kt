@@ -50,6 +50,8 @@ internal class ShareAudioPreparer(
                 throw SharePrepareException(SharePrepareFailure.Io, "下载音频失败：${error.message}", error)
             }
             var written = 0L
+            // 总长提到外层：读取结束后要拿它核对有没有被截断
+            var total = -1L
             response.use { body ->
                 if (body.code in REJECTED_CODES) {
                     throw SharePrepareException(SharePrepareFailure.Rejected, "音频地址已失效：HTTP ${body.code}")
@@ -57,22 +59,31 @@ internal class ShareAudioPreparer(
                 if (!body.isSuccessful) {
                     throw SharePrepareException(SharePrepareFailure.Io, "下载音频失败：HTTP ${body.code}")
                 }
-                val total = body.body.contentLength().takeIf { it > 0 } ?: -1L
+                total = body.body.contentLength().takeIf { it > 0 } ?: -1L
                 body.body.byteStream().use { input ->
                     target.outputStream().use { output ->
                         val buffer = ByteArray(64 * 1024)
-                        while (true) {
-                            val count = input.read(buffer)
-                            if (count < 0) break
-                            output.write(buffer, 0, count)
-                            written += count
-                            // 没有 Content-Length 时进度按已读字节走，界面上仍能看到"在动"
-                            onProgress(written, if (total > 0) total else written)
+                        // 读取中途断开（CDN 掐断、分块传输不完整）要归到 Io，别让它裸奔到上层
+                        try {
+                            while (true) {
+                                val count = input.read(buffer)
+                                if (count < 0) break
+                                output.write(buffer, 0, count)
+                                written += count
+                                // 没有 Content-Length 时进度按已读字节走，界面上仍能看到"在动"
+                                onProgress(written, if (total > 0) total else written)
+                            }
+                        } catch (error: IOException) {
+                            throw SharePrepareException(SharePrepareFailure.Io, "下载中断：${error.message}", error)
                         }
                     }
                 }
             }
             if (written == 0L) throw SharePrepareException(SharePrepareFailure.Empty, "下载到的音频是空的")
+            // 声明了总长就按总长核对：截断的文件整曲模式可能蒙混过关，片段模式重编码会直接失败
+            if (total > 0 && written != total) {
+                throw SharePrepareException(SharePrepareFailure.Io, "下载不完整：$written/$total 字节")
+            }
             onProgress(written, written)
             target
         } catch (error: Exception) {
@@ -86,3 +97,4 @@ internal class ShareAudioPreparer(
         val REJECTED_CODES = setOf(401, 403, 404, 410)
     }
 }
+

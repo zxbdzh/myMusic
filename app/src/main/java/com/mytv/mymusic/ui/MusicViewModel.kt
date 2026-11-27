@@ -7009,11 +7009,24 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         mode: com.mytv.mymusic.data.share.ShareMode,
         clip: com.mytv.mymusic.data.share.ShareClipRange?,
     ) = viewModelScope.launch {
+        // 服务端解码失败常常是这一次传上去的文件不完整：自动重下一次（新幂等键）再试一遍
+        runPublish(song, lines, selectedIndexes, template, mode, clip, allowServerRetry = true)
+    }
+
+    private suspend fun runPublish(
+        song: Song,
+        lines: List<com.mytv.mymusic.data.share.ShareLyricSource>,
+        selectedIndexes: Set<Int>,
+        template: com.mytv.mymusic.data.ShareCardStyle,
+        mode: com.mytv.mymusic.data.share.ShareMode,
+        clip: com.mytv.mymusic.data.share.ShareClipRange?,
+        allowServerRetry: Boolean,
+    ) {
         val context = getApplication<Application>()
         val origin = com.mytv.mymusic.data.share.normalizeShareServerUrl(settingsState.value.share.serverUrl)
         if (origin == null) {
             message("先在设置 › 在线分享里填写分享服务地址", error = true)
-            return@launch
+            return
         }
         val metadata = runCatching {
             com.mytv.mymusic.data.share.buildShareMetadata(
@@ -7029,7 +7042,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             )
         }.getOrElse { error ->
             message(error.message?.takeIf { it.isNotBlank() } ?: "分享内容不完整", error = true)
-            return@launch
+            return
         }
 
         // 状态机自己决定复用还是新键（失败后重试沿用原键），这里只读回它定下的那个
@@ -7044,7 +7057,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                     SharePublishEvent.Failed(error.message?.takeIf { it.isNotBlank() } ?: "音频准备失败"),
                 )
                 message(error.message?.takeIf { it.isNotBlank() } ?: "音频准备失败", error = true)
-                return@launch
+                return
             }
         val workId = com.mytv.mymusic.data.share.SharePublishWorker.enqueue(
             context,
@@ -7059,9 +7072,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         if (workId == null) {
             _sharePublish.value = _sharePublish.value.reduce(SharePublishEvent.Failed("后台任务没能启动，稍后再试"))
             message("后台任务没能启动，稍后再试", error = true)
-            return@launch
+            return
         }
-        observeSharePublish(context, workId)
+        observeSharePublish(context, workId, allowServerRetry) {
+            // 第二次走新的幂等键：同键会命中服务端那份失败记录，重传也救不回来
+            runPublish(song, lines, selectedIndexes, template, mode, clip, allowServerRetry = false)
+        }
         message("已开始上传「${song.title}」，可以离开这一页")
     }
 
@@ -7101,7 +7117,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** 跟着后台任务更新分享页的状态：成功回传链接，还在处理就等转码完成，失败给原因。 */
-    private fun observeSharePublish(context: Application, workId: java.util.UUID) {
+    private fun observeSharePublish(
+        context: Application,
+        workId: java.util.UUID,
+        allowServerRetry: Boolean,
+        retry: suspend () -> Unit,
+    ) {
         sharePublishJob?.cancel()
         sharePublishJob = viewModelScope.launch {
             val manager = BackgroundWork.get(context) ?: return@launch
@@ -7116,7 +7137,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                             _sharePublish.value = _sharePublish.value.reduce(SharePublishEvent.Ready(url))
                         } else if (shareId.isNotBlank()) {
                             // 整曲分享在服务端还要校验与转码，链接不会立刻就有，按 id 轮询到出结果
-                            awaitShareReady(shareId)
+                            awaitShareReady(shareId, allowServerRetry, retry)
                         } else {
                             _sharePublish.value = _sharePublish.value.reduce(SharePublishEvent.Failed("服务端没有返回链接"))
                         }
@@ -7136,8 +7157,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** 上传成功后的处理阶段：每 3 秒问一次服务端，最长等 3 分钟。 */
-    private suspend fun awaitShareReady(shareId: String) {
+    /**
+     * 上传成功后的处理阶段：每 3 秒问一次服务端，最长等 3 分钟。
+     *
+     * 服务端解码失败多半是这次传上去的文件不完整，允许时重下一次再试；再失败才落到界面上。
+     */
+    private suspend fun awaitShareReady(shareId: String, allowServerRetry: Boolean, retry: suspend () -> Unit) {
         val origin = com.mytv.mymusic.data.share.normalizeShareServerUrl(settingsState.value.share.serverUrl) ?: return
         val token = app.secretStore.secret(com.mytv.mymusic.data.share.shareTokenName(origin)).orEmpty()
         if (token.isBlank()) return
@@ -7150,7 +7175,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 return
             }
             if (detail?.status == "failed") {
-                _sharePublish.value = _sharePublish.value.reduce(SharePublishEvent.Failed("服务端处理失败"))
+                if (allowServerRetry) {
+                    retry()
+                } else {
+                    _sharePublish.value = _sharePublish.value.reduce(SharePublishEvent.Failed("服务端处理失败，重试一次仍不行"))
+                }
                 return
             }
         }
@@ -8460,3 +8489,4 @@ internal fun linkProviderId(link: String): String {
         else -> ""
     }
 }
+

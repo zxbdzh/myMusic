@@ -95,5 +95,23 @@ class ShareAudioPreparerTest {
         val files = temporary.root.resolve("share").listFiles().orEmpty()
         assertFalse("失败不能留下半截文件", files.any { it.isFile })
     }
+
+    @Test
+    fun truncatedDownloadIsReportedAsIo() = runTest {
+        // 服务端声明 4096 字节，实际只发 1024 就断开：不能当成功，也不能把半截文件传上去
+        server.enqueue(
+            MockResponse.Builder()
+                .body(okio.Buffer().write(ByteArray(1024) { 3 }))
+                .setHeader("Content-Length", "4096")
+                .build(),
+        )
+
+        val error = runCatching { preparer.prepare(server.url("/audio.mp3").toString(), "mp3") }.exceptionOrNull()
+
+        assertTrue("截断必须归到 Io，上层才好提示重试：${error?.javaClass?.simpleName}", error is SharePrepareException)
+        assertEquals(SharePrepareFailure.Io, (error as SharePrepareException).failure)
+        val files = temporary.root.resolve("share").listFiles().orEmpty()
+        assertFalse("截断的文件不能留在缓存里", files.any { it.isFile })
+    }
 }
 

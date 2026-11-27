@@ -211,3 +211,118 @@ private fun trimZero(value: Double): String {
     val text = if (value >= 100) value.toInt().toString() else String.format("%.1f", value)
     return text.removeSuffix(".0")
 }
+
+// ---------------------------------------------------------------------------
+// B2 列表页新增领域模型（歌手 / 专辑 / 评论 / 链接解析）。
+// 与 :core 的同名概念一一对应，但只带 UI 用得到的字段——映射在 CoreMusicCatalog 一次完成。
+// ---------------------------------------------------------------------------
+
+/** 歌手摘要：搜索结果行与歌手页头部共用。 */
+@Immutable
+data class ArtistSummary(
+    val id: String,
+    val name: String,
+    /** 平台 id：打开歌手页时回源取数用（UI 不认 :core 的 provider）。 */
+    val sourceId: String = "",
+    val avatarUrl: String = "",
+    val alias: String = "",
+    val songCount: Int = 0,
+    val albumCount: Int = 0,
+    val fans: Long = 0,
+)
+
+/** 歌手页一屏数据。albums 取第一页（约 24 张），翻页是 B3 的事。 */
+@Immutable
+data class ArtistPayload(
+    val artist: ArtistSummary,
+    val description: String = "",
+    val hotSongs: List<Track> = emptyList(),
+    val albums: List<AlbumSummary> = emptyList(),
+    val hasMoreAlbums: Boolean = false,
+)
+
+/** 专辑摘要：歌手页专辑网格与专辑详情头部共用。 */
+@Immutable
+data class AlbumSummary(
+    val id: String,
+    val name: String,
+    val sourceId: String = "",
+    val coverUrl: String = "",
+    val artist: String = "",
+    /** 主歌手的平台 id：专辑页"更多作品"回歌手入口用。 */
+    val artistId: String = "",
+    /** 统一成 yyyy-MM-dd 或 yyyy；平台没给就空。 */
+    val publishTime: String = "",
+    /** 平台给的类型：专辑 / EP / Single / 现场…… */
+    val type: String = "",
+    val trackCount: Int = 0,
+    val company: String = "",
+    val description: String = "",
+)
+
+/** 专辑详情：头部资料 + 曲目。 */
+@Immutable
+data class AlbumPayload(
+    val album: AlbumSummary,
+    val tracks: List<Track> = emptyList(),
+)
+
+/** 一条歌曲评论。timeText 优先用平台给的文案，否则由实现换算相对时间。 */
+@Immutable
+data class CommentItem(
+    val id: String,
+    val userName: String,
+    val avatarUrl: String = "",
+    val content: String,
+    val likedCount: Long = 0,
+    val timeText: String = "",
+    val location: String = "",
+)
+
+/** 评论分页。[hotComments] 只在第一页返回。 */
+@Immutable
+data class CommentPage(
+    val page: Int,
+    val comments: List<CommentItem> = emptyList(),
+    val hotComments: List<CommentItem> = emptyList(),
+    val total: Long = 0,
+    val hasMore: Boolean = false,
+)
+
+/**
+ * 链接解析结果：把一条平台分享链接变成可展示的内容。
+ * [collectionId] 非空表示是歌单 / 专辑这类集合，详情页拿它回源取曲目。
+ */
+@Immutable
+data class ParsedLink(
+    /** song / playlist / album。 */
+    val kind: String,
+    val title: String,
+    val subtitle: String = "",
+    val sourceId: String = "",
+    val collectionId: String = "",
+    val tracks: List<Track> = emptyList(),
+)
+
+/** 歌手页状态：进入 loading，取回 payload 或给出 error。 */
+@Immutable
+data class ArtistUiState(
+    val loading: Boolean = false,
+    val payload: ArtistPayload? = null,
+    val error: String = "",
+)
+
+/** 评论侧栏状态。open=false 时 AppShell 不渲染。 */
+@Immutable
+data class CommentsUiState(
+    val open: Boolean = false,
+    val track: Track? = null,
+    val loading: Boolean = false,
+    /** 已经加载到的最大页码；追加下一页用。 */
+    val page: Int = 0,
+    val comments: List<CommentItem> = emptyList(),
+    val hotComments: List<CommentItem> = emptyList(),
+    val total: Long = 0,
+    val hasMore: Boolean = false,
+    val error: String = "",
+)

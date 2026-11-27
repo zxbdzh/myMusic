@@ -1,9 +1,13 @@
 package com.mytv.mymusic.desktop.state
 
 import com.mytv.mymusic.core.PlatformPaths
+import com.mytv.mymusic.data.ArtistDetail
 import com.mytv.mymusic.data.MusicRepository
 import com.mytv.mymusic.data.Song
+import com.mytv.mymusic.data.SongComment
+import com.mytv.mymusic.data.SongCommentPage
 import com.mytv.mymusic.data.TopList
+import com.mytv.mymusic.data.toAlbumSummary
 import com.mytv.mymusic.data.Playlist as CorePlaylist
 import com.mytv.mymusic.data.ProviderInfo as CoreProviderInfo
 import com.mytv.mymusic.data.native.NativeProviders
@@ -179,6 +183,91 @@ class CoreMusicCatalog(
             .map { it.toUi(id) }
     }
 
+    // --------------------------------------------------------------- B2：歌手
+
+    override suspend fun searchArtists(providerId: String, keyword: String): List<ArtistSummary> {
+        val id = providerId.ifBlank { defaultProviderId }
+        if (keyword.isBlank()) return emptyList()
+        // 歌手搜索走单平台接口：聚合层没有歌手维度，跨平台拼结果反而会把同名歌手混在一列
+        return guarded("$id 歌手搜索") { repository.searchArtists(id, cookies.get(id), keyword) }
+            .orEmpty()
+            .map { it.toArtistUi(id) }
+    }
+
+    override suspend fun artistDetail(providerId: String, artistId: String): ArtistPayload? {
+        val id = providerId.ifBlank { defaultProviderId }
+        val cookie = cookies.get(id)
+        val detail = guarded("$id 歌手详情") { repository.artistDetail(id, cookie, artistId) }
+            ?: return null
+        // 专辑第一页：和热歌互不依赖，单独取（热歌已在 detail 里带回）
+        val albums = guarded("$id 歌手专辑") { repository.artistAlbums(id, cookie, artistId, 1, 24) }
+        return detail.toUi(id, albums?.albums.orEmpty(), albums?.hasMore ?: false)
+    }
+
+    override suspend fun albumDetail(providerId: String, albumId: String): AlbumPayload? {
+        val id = providerId.ifBlank { defaultProviderId }
+        val detail = guarded("$id 专辑详情") { repository.albumDetail(id, cookies.get(id), albumId) }
+            ?: return null
+        return AlbumPayload(
+            album = detail.album.toUi(id),
+            tracks = detail.songs.map { it.toUi(id) },
+        )
+    }
+
+    // --------------------------------------------------------------- B2：评论
+
+    override suspend fun comments(track: Track, page: Int, providerId: String): CommentPage? {
+        val id = providerId.ifBlank { track.providerId }
+        val song = songs[track.id] ?: return null
+        val result = guarded("$id 评论") {
+            // :core 的 comments 按 song.source 找 provider，签名 (song, cookie, page, limit)，没有 provider 参数
+            repository.comments(song, cookies.get(id), page.coerceAtLeast(1), 20)
+        } ?: return null
+        return result.toUi()
+    }
+
+    override fun supportsComments(providerId: String): Boolean =
+        // 桌面 B2 直接问 :core 的能力位；provider 未注册时 NaturalProviders 返回 null，视为不支持
+        runCatching { repository.supportsComments(providerId) }.getOrDefault(false)
+
+    // --------------------------------------------------------------- B2：链接解析
+
+    override suspend fun parseLink(providerId: String, link: String): ParsedLink? {
+        val id = providerId.ifBlank { defaultProviderId }
+        val cookie = cookies.get(id)
+        val text = link.trim()
+        if (text.isBlank()) return null
+        // 先按歌单解析，失败再按专辑，最后按单曲：三条路径互斥，串行尝试成本最低
+        guarded("$id 解析歌单链接") { repository.parsePlaylist(id, cookie, text) }?.let { parsed ->
+            return ParsedLink(
+                kind = "playlist",
+                title = parsed.item.name,
+                subtitle = parsed.item.creator.ifBlank { "${parsed.songs.size} 首" },
+                sourceId = id,
+                collectionId = parsed.item.id,
+                tracks = parsed.songs.map { it.toUi(id) },
+            )
+        }
+        guarded("$id 解析专辑链接") { repository.parseAlbum(id, cookie, text) }?.let { parsed ->
+            return ParsedLink(
+                kind = "album",
+                title = parsed.item.name,
+                subtitle = parsed.item.creator,
+                sourceId = id,
+                collectionId = parsed.item.id,
+                tracks = parsed.songs.map { it.toUi(id) },
+            )
+        }
+        val song = guarded("$id 解析单曲链接") { repository.parseSong(id, cookie, text) } ?: return null
+        return ParsedLink(
+            kind = "song",
+            title = song.name,
+            subtitle = song.artist,
+            sourceId = id,
+            tracks = listOf(song.toUi(id)),
+        )
+    }
+
     override suspend fun library(): LibraryPayload {
         // 收藏 / 历史还没有本地库（Room 在 t2b），先用最近一次会话里点过的歌撑起"我的"页，
         // 收藏走内存 + 文件；等本地库落地后换实现，页面不用改
@@ -261,6 +350,82 @@ class CoreMusicCatalog(
         coverUrl = cover,
         sourceId = source.ifBlank { providerId },
     )
+
+    /** 搜索结果里的歌手行：Playlist 形状 → ArtistSummary。头像取歌单封面（平台没单独给）。 */
+    private fun CorePlaylist.toArtistUi(providerId: String): ArtistSummary = ArtistSummary(
+        id = id,
+        name = name,
+        sourceId = source.ifBlank { providerId },
+        avatarUrl = cover,
+        alias = creator,
+    )
+
+    private fun ArtistDetail.toUi(providerId: String, albums: List<com.mytv.mymusic.data.AlbumSummary>, hasMore: Boolean): ArtistPayload {
+        val source = profile.source.ifBlank { providerId }
+        return ArtistPayload(
+            artist = ArtistSummary(
+                id = profile.id,
+                name = profile.name,
+                sourceId = source,
+                avatarUrl = profile.avatar,
+                alias = profile.alias,
+                songCount = profile.songCount,
+                albumCount = profile.albumCount,
+                fans = profile.fans,
+            ),
+            description = profile.description,
+            hotSongs = hotSongs.map { it.toUi(source) },
+            albums = albums.map { it.toUi(source) },
+            hasMoreAlbums = hasMore,
+        )
+    }
+
+    private fun com.mytv.mymusic.data.AlbumSummary.toUi(providerId: String): AlbumSummary = AlbumSummary(
+        id = id,
+        name = name,
+        sourceId = source.ifBlank { providerId },
+        coverUrl = cover,
+        artist = artist,
+        artistId = artistId,
+        publishTime = publishTime,
+        type = type,
+        trackCount = trackCount,
+        company = company,
+        description = description,
+    )
+
+    private fun SongComment.toUi(): CommentItem = CommentItem(
+        id = id,
+        userName = userName,
+        avatarUrl = avatar,
+        content = content,
+        likedCount = likedCount,
+        // 平台给了文案就直用；没给就换算成"N 天前"这种相对时间
+        timeText = timeText.ifBlank { relativeTime(time) },
+        location = location,
+    )
+
+    private fun SongCommentPage.toUi(): CommentPage = CommentPage(
+        page = page,
+        comments = comments.map { it.toUi() },
+        hotComments = hotComments.map { it.toUi() },
+        total = total,
+        hasMore = hasMore,
+    )
+
+    /** 秒级时间戳 → 「3 天前」；超过一年直接给日期。0 视为未知。 */
+    private fun relativeTime(seconds: Long): String {
+        if (seconds <= 0) return ""
+        val diff = System.currentTimeMillis() / 1000 - seconds
+        return when {
+            diff < 3600 -> "${(diff / 60).coerceAtLeast(1)} 分钟前"
+            diff < 86_400 -> "${diff / 3600} 小时前"
+            diff < 86_400 * 365 -> "${diff / 86_400} 天前"
+            else -> java.time.Instant.ofEpochSecond(seconds)
+                .atZone(java.time.ZoneId.systemDefault())
+                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd"))
+        }
+    }
 
     /**
      * 专辑 / 歌单在搜索结果里先按「一行」展示：标题取集合名，歌手位放创建者，没有就放曲目数。

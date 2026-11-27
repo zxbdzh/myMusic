@@ -246,6 +246,133 @@ class DefaultMusicStore(
         if (submitted.isNotBlank()) submitSearch(submitted) else _state.update { it.copy(search = it.search.copy(error = "")) }
     }
 
+    // ---------------------------------------------------------------- B2：歌手 / 专辑 / 评论 / 链接解析
+    // 这些都是「点开才取」的按需数据：失败只写 state 的 error，不让页面崩。
+
+    override fun openArtist(providerId: String, artistId: String, name: String) {
+        _state.update {
+            it.copy(
+                detailKey = DetailKey.Artist(providerId, artistId, name),
+                artist = ArtistUiState(loading = true),
+            )
+        }
+        scope.launch {
+            val payload = runCatching { catalog.artistDetail(providerId, artistId) }.getOrNull()
+            _state.update { state ->
+                state.copy(
+                    artist = if (payload != null) {
+                        ArtistUiState(payload = payload)
+                    } else {
+                        ArtistUiState(error = "歌手资料加载失败")
+                    },
+                )
+            }
+        }
+    }
+
+    override fun openAlbum(providerId: String, albumId: String, name: String) {
+        _state.update {
+            it.copy(
+                detailKey = DetailKey.Album(providerId, albumId, name),
+                album = null,
+                albumLoading = true,
+                albumError = "",
+            )
+        }
+        scope.launch {
+            val payload = runCatching { catalog.albumDetail(providerId, albumId) }.getOrNull()
+            _state.update { state ->
+                state.copy(
+                    album = payload,
+                    albumLoading = false,
+                    albumError = if (payload == null) "专辑加载失败" else "",
+                )
+            }
+        }
+    }
+
+    override fun closeDetail() {
+        _state.update {
+            it.copy(detailKey = null, artist = ArtistUiState(), album = null, albumError = "")
+        }
+    }
+
+    override fun openComments(track: Track) {
+        _state.update {
+            it.copy(comments = CommentsUiState(open = true, track = track, loading = true))
+        }
+        scope.launch {
+            val first = runCatching { catalog.comments(track, 1) }.getOrNull()
+            _state.update { state ->
+                state.copy(
+                    comments = if (first == null) {
+                        state.comments.copy(loading = false, error = "评论加载失败")
+                    } else {
+                        CommentsUiState(
+                            open = true,
+                            track = track,
+                            page = first.page,
+                            comments = first.comments,
+                            hotComments = first.hotComments,
+                            total = first.total,
+                            hasMore = first.hasMore,
+                        )
+                    },
+                )
+            }
+        }
+    }
+
+    override fun closeComments() {
+        _state.update { it.copy(comments = CommentsUiState()) }
+    }
+
+    override fun loadMoreComments() {
+        val current = _state.value.comments
+        val track = current.track ?: return
+        if (!current.hasMore || current.loading) return
+        _state.update { it.copy(comments = it.comments.copy(loading = true, error = "")) }
+        scope.launch {
+            val next = runCatching { catalog.comments(track, current.page + 1) }.getOrNull()
+            _state.update { state ->
+                state.copy(
+                    comments = if (next == null) {
+                        state.comments.copy(loading = false, error = "下一页评论加载失败")
+                    } else {
+                        state.comments.copy(
+                            loading = false,
+                            page = next.page,
+                            comments = state.comments.comments + next.comments,
+                            hasMore = next.hasMore,
+                            total = next.total,
+                        )
+                    },
+                )
+            }
+        }
+    }
+
+    override fun parseLink(link: String) {
+        scope.launch {
+            val parsed = runCatching {
+                catalog.parseLink(_state.value.providerId, link)
+            }.getOrNull()
+            if (parsed == null) {
+                _state.update { it.copy(notice = "链接解析失败") }
+            } else {
+                _state.update { it.copy(notice = "已解析：${parsed.title}") }
+            }
+        }
+    }
+
+    override fun clearParsedLink() {
+        _state.update { it.copy(notice = "") }
+    }
+
+    override fun openArtistFromSearch(summary: ArtistSummary) {
+        openArtist(summary.sourceId.ifBlank { _state.value.providerId }, summary.id, summary.name)
+    }
+
     // ---------------------------------------------------------------- 播放
 
     override fun playTrack(track: Track, queue: List<Track>) {

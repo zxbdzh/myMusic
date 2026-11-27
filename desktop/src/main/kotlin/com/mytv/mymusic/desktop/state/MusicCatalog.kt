@@ -9,7 +9,7 @@ package com.mytv.mymusic.desktop.state
  * 实现内部自己切 IO，UI 侧只负责展示 loading / error。
  *
  * 约定：
- *  - 不抛异常给 UI：失败通过返回空列表 + [MusicCatalog.lastError] 或者页面的 error 字段暴露；
+ *  - 不抛异常给 UI：失败通过返回空列表 + 页面的 error 字段暴露；
  *  - 结果必须已经按显示顺序排好，UI 不再排序（多音源聚合的排序规则属于业务层）；
  *  - [search] 的 [kind] 语义和 Android 一致：单曲 / 专辑 / 歌单。
  */
@@ -29,6 +29,31 @@ interface MusicCatalog {
     suspend fun chartTracks(chart: ChartSummary): List<Track>
 
     suspend fun playlistTracks(playlist: PlaylistSummary): List<Track>
+
+    // ---- B2：歌手 / 专辑 / 评论 / 链接解析 ----
+    // 这些方法都是"按需取"：页面点开才调，失败返回 null / 空表，
+    // 由调用方（store）转成页面的 error 字段，而不是抛异常。
+
+    /** 关键词搜歌手（歌单形状的结果，UI 展示为头像行）。 */
+    suspend fun searchArtists(providerId: String, keyword: String): List<ArtistSummary>
+
+    /** 歌手主页：资料 + 热歌 + 第一页专辑。 */
+    suspend fun artistDetail(providerId: String, artistId: String): ArtistPayload?
+
+    /** 专辑详情：头部资料 + 曲目。 */
+    suspend fun albumDetail(providerId: String, albumId: String): AlbumPayload?
+
+    /**
+     * 平台歌曲评论。[providerId] 缺省时用曲目自带的 providerId——评论是平台私有能力，
+     * 不能跨平台聚合。
+     */
+    suspend fun comments(track: Track, page: Int, providerId: String = track.providerId): CommentPage?
+
+    /** 支持读评论的平台 id（列表判断"评论"入口显不显示）。 */
+    fun supportsComments(providerId: String): Boolean = false
+
+    /** 平台分享链接解析（歌单 / 专辑 / 单曲）。解析失败返回 null。 */
+    suspend fun parseLink(providerId: String, link: String): ParsedLink?
 
     suspend fun library(): LibraryPayload
 

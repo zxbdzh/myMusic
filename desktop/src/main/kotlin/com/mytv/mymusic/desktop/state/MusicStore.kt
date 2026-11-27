@@ -17,6 +17,25 @@ enum class Route(val label: String) {
 }
 
 /**
+ * 详情页在页内子视图之上的一层"路由 key"。
+ *
+ * Android 端是 navigation-compose 的 `collection/{key}` / `artist/{id}` / `album/{id}`，
+ * 桌面用这一个 sealed class 顶替：AppShell 按它决定渲染哪一页，返回键就是弹栈。
+ * key 里的字符串全部是"回源取数要的最小信息"（平台 id + 平台侧 id），
+ * 不持有整包 payload——payload 由 store 按需拉取后放进对应 UiState。
+ */
+sealed class DetailKey {
+    /** 榜单 / 歌单详情（沿用旧 collection 子视图的数据流）。 */
+    data class Collection(val key: String) : DetailKey()
+
+    /** 歌手主页。 */
+    data class Artist(val providerId: String, val artistId: String, val name: String) : DetailKey()
+
+    /** 专辑详情。 */
+    data class Album(val providerId: String, val albumId: String, val name: String) : DetailKey()
+}
+
+/**
  * 整个主窗口的可渲染状态。
  *
  * 它是 Android `MusicViewModel`（7101 行）里"界面要读的那一份"的桌面版：
@@ -39,6 +58,15 @@ data class MusicUiState(
     val search: SearchUiState = SearchUiState(),
     val library: LibraryUiState = LibraryUiState(),
     val collection: CollectionUiState = CollectionUiState(),
+    /** 歌手页 / 专辑详情（B2）。detailKey 决定渲染哪一页，null 表示没有详情打开。 */
+    val artist: ArtistUiState = ArtistUiState(),
+    val album: AlbumPayload? = null,
+    val albumLoading: Boolean = false,
+    val albumError: String = "",
+    /** 评论侧栏。open=false 时 AppShell 不渲染。 */
+    val comments: CommentsUiState = CommentsUiState(),
+    /** 详情路由栈：非空时 RouteBody 渲染详情页而不是入口页。 */
+    val detailKey: DetailKey? = null,
     val current: Track? = null,
     val queue: List<Track> = emptyList(),
     val queueIndex: Int = -1,
@@ -84,6 +112,20 @@ interface MusicStore {
     fun openChart(chart: ChartSummary)
     fun closeCollection()
 
+    // ---- 歌手 / 专辑（B2）----
+    fun openArtist(providerId: String, artistId: String, name: String)
+    fun openAlbum(providerId: String, albumId: String, name: String)
+    fun closeDetail()
+
+    // ---- 评论（B2）----
+    fun openComments(track: Track)
+    fun closeComments()
+    fun loadMoreComments()
+
+    // ---- 链接解析（B2）----
+    fun parseLink(link: String)
+    fun clearParsedLink()
+
     // ---- 歌单 ----
     fun refreshPlaylists()
     fun selectPlaylistCategory(name: String)
@@ -96,6 +138,9 @@ interface MusicStore {
     fun selectSearchKind(kind: SearchKind)
     fun clearSearch()
     fun retrySearch()
+
+    /** 搜索页里点开一个歌手结果行（B2：搜索的 kind 集合里也放歌手）。 */
+    fun openArtistFromSearch(summary: ArtistSummary)
 
     // ---- 播放 ----
     fun playTrack(track: Track, queue: List<Track> = emptyList())

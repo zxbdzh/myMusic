@@ -57,6 +57,19 @@ class DemoMusicCatalog : MusicCatalog {
     override suspend fun playlistTracks(playlist: PlaylistSummary): List<Track> =
         DemoFixtures.playlistTracks(playlist.id)
 
+    // ---- B2 接缝：demo 数据源不做歌手/评论/链接解析，返回空值即可 ----
+    // 页面对这些能力都有"平台不支持"的空态兜底，所以 demo 侧静默给空。
+
+    override suspend fun searchArtists(providerId: String, keyword: String): List<ArtistSummary> = emptyList()
+
+    override suspend fun artistDetail(providerId: String, artistId: String): ArtistPayload? = null
+
+    override suspend fun albumDetail(providerId: String, albumId: String): AlbumPayload? = null
+
+    override suspend fun comments(track: Track, page: Int, providerId: String): CommentPage? = null
+
+    override suspend fun parseLink(providerId: String, link: String): ParsedLink? = null
+
     override suspend fun library(): LibraryPayload = LibraryPayload(
         favorites = DemoFixtures.tracks.take(5),
         history = DemoFixtures.tracks.drop(3).take(8),

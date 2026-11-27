@@ -5,7 +5,7 @@ import com.mytv.mymusic.data.ShareCardStyle
 import com.mytv.mymusic.data.native.AudioQuality
 
 /** 涉分享的歌词行：只保留排版与裁剪需要的时间与文字。 */
-internal data class ShareLyricSource(
+data class ShareLyricSource(
     val text: String,
     val atMs: Long,
     val translation: String = "",

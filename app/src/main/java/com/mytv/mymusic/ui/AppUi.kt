@@ -313,6 +313,20 @@ class MusicActions(private val model: MusicViewModel) {
     suspend fun hasShareToken(): Boolean = model.hasShareToken()
     fun saveShareToken(token: String) = model.saveShareToken(token)
     fun removeShareToken() = model.removeShareToken()
+
+    /** 分享页「在线听歌」区块的状态流。 */
+    fun sharePublishState(): kotlinx.coroutines.flow.StateFlow<com.mytv.mymusic.data.share.SharePublishState> =
+        model.sharePublish
+
+    /** 发布一次在线分享：准备音频后交给后台任务上传。 */
+    fun publishShare(
+        song: com.mytv.mymusic.data.Song,
+        lines: List<com.mytv.mymusic.data.share.ShareLyricSource>,
+        selectedIndexes: Set<Int>,
+        template: com.mytv.mymusic.data.ShareCardStyle,
+        mode: com.mytv.mymusic.data.share.ShareMode,
+        clip: com.mytv.mymusic.data.share.ShareClipRange?,
+    ) = model.publishShare(song, lines, selectedIndexes, template, mode, clip)
     fun setLyricStage(transform: (com.mytv.mymusic.data.LyricStagePrefs) -> com.mytv.mymusic.data.LyricStagePrefs) =
         model.setLyricStage(transform)
     fun setLyricText(transform: (com.mytv.mymusic.data.LyricTextPrefs) -> com.mytv.mymusic.data.LyricTextPrefs) =

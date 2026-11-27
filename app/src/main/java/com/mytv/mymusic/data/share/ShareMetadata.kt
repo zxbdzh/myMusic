@@ -72,7 +72,7 @@ internal enum class ShareQuality {
 }
 
 @Serializable
-internal enum class ShareMode {
+enum class ShareMode {
     @SerialName("full")
     Full,
 

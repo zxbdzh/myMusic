@@ -1,31 +1,31 @@
 package com.mytv.mymusic.data.share
 
-/** 分享任务所处阶段。 */
-internal enum class SharePublishPhase {
+/** 分享任务所处阶段。[label] 是界面用词，与「我的分享」的状态词一致。 */
+enum class SharePublishPhase(val label: String) {
     /** 还没发布。 */
-    Idle,
+    Idle("未发布"),
 
     /** 正在上传音频副本。 */
-    Uploading,
+    Uploading("上传中"),
 
     /** 服务端在处理（裁剪、转码）。 */
-    Processing,
+    Processing("准备中"),
 
     /** 可收听，链接可用。 */
-    Ready,
+    Ready("可收听"),
 
     /** 失败，可重试。 */
-    Failed,
+    Failed("失败"),
 
     /** 已撤销。 */
-    Revoked,
+    Revoked("已撤销"),
 
     /** 已过期。 */
-    Expired,
+    Expired("已过期"),
 }
 
 /** 一次分享任务的 UI 状态。 */
-internal data class SharePublishState(
+data class SharePublishState(
     val phase: SharePublishPhase = SharePublishPhase.Idle,
     val idempotencyKey: String = "",
     val progress: Float = 0f,

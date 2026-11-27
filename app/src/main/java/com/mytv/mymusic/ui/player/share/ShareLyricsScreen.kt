@@ -100,6 +100,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -280,6 +281,21 @@ private fun ShareLyricsScreen(
     val canvasLayer = rememberGraphicsLayer()
     var busy by remember { mutableStateOf<ShareAction?>(null) }
     val text = shareText(allRows, withSub, prefs.textFormat, song.title, song.artist, session.link)
+    val publishState by remember { actions.sharePublishState() }.collectAsState()
+    var onlineMode by remember { mutableStateOf(com.mytv.mymusic.data.share.ShareMode.Full) }
+    // 片段范围由选句推出（首句前、末句后各留 1 秒）；歌词没有时间戳时不可用
+    val onlineClip = remember(session.lines, session.selected, session.synced, song.duration) {
+        com.mytv.mymusic.data.share.shareClipRange(
+            starts = session.lines.map { it.timeMs },
+            selected = session.selected,
+            durationMs = song.duration.coerceAtLeast(0) * 1000L,
+            reliableTiming = session.synced,
+        )
+    }
+    val onlineDuration = remember(song.duration) {
+        val seconds = song.duration.coerceAtLeast(0)
+        "整曲 · 时长 ${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')}"
+    }
 
     fun export(kind: ShareAction) {
         if (busy != null) return
@@ -355,6 +371,31 @@ private fun ShareLyricsScreen(
             onChange = ::update,
             onPickPicture = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
             onEditColor = { editingColor = it },
+            publish = publishState,
+            onlineConfigured = prefs.serverUrl.isNotBlank(),
+            onlineClipAvailable = onlineClip != null,
+            onlineDuration = onlineDuration,
+            onlineMode = onlineMode,
+            onOnlineMode = { onlineMode = it },
+            onPublish = {
+                actions.publishShare(
+                    song = song,
+                    lines = session.lines.map {
+                        com.mytv.mymusic.data.share.ShareLyricSource(
+                            text = it.text,
+                            atMs = it.timeMs.coerceAtLeast(0),
+                            translation = it.sub,
+                        )
+                    },
+                    selectedIndexes = session.selected,
+                    template = prefs.style,
+                    mode = onlineMode,
+                    clip = onlineClip,
+                )
+            },
+            onCopyLink = { url ->
+                scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("听歌链接", url))) }
+            },
         )
     }
 
@@ -711,6 +752,14 @@ private fun ShareOptions(
     onChange: (SharePrefs) -> Unit,
     onPickPicture: () -> Unit,
     onEditColor: (text: Boolean) -> Unit,
+    publish: com.mytv.mymusic.data.share.SharePublishState,
+    onlineConfigured: Boolean,
+    onlineClipAvailable: Boolean,
+    onlineDuration: String,
+    onlineMode: com.mytv.mymusic.data.share.ShareMode,
+    onOnlineMode: (com.mytv.mymusic.data.share.ShareMode) -> Unit,
+    onPublish: () -> Unit,
+    onCopyLink: (String) -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
     Column(modifier) {
@@ -803,6 +852,17 @@ private fun ShareOptions(
         SegmentedGroup {
             rows.forEachIndexed { i, row -> row(i, rows.size) }
         }
+        Spacer(Modifier.height(16.dp))
+        ShareOnlineSection(
+            publish = publish,
+            configured = onlineConfigured,
+            clipAvailable = onlineClipAvailable,
+            durationLabel = onlineDuration,
+            mode = onlineMode,
+            onMode = onOnlineMode,
+            onPublish = onPublish,
+            onCopyLink = onCopyLink,
+        )
         Spacer(Modifier.height(10.dp))
     }
 }

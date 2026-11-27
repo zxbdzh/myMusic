@@ -164,6 +164,11 @@ import com.mytv.mymusic.recognize.RecordedAudio
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import androidx.work.WorkInfo
+import com.mytv.mymusic.BackgroundWork
+import com.mytv.mymusic.data.share.SharePublishEvent
+import com.mytv.mymusic.data.share.SharePublishState
+import com.mytv.mymusic.data.share.reduce
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -6549,7 +6554,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         awaitController()
         restoreJob?.await()
         val song = base.value.current ?: return false
-        val change = changeFavorite(song) { text ->
+        val change = changeFavorite(favoriteWriteSong(song)) { text ->
             android.widget.Toast.makeText(app, text, android.widget.Toast.LENGTH_SHORT).show()
         }
         withTimeoutOrNull(6_000) { change?.platformJob?.join() }
@@ -6674,6 +6679,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         app.secretStore.removeSecret(com.mytv.mymusic.data.share.shareTokenName(origin))
     }
 
+    private var sharePublishJob: Job? = null
+    private val _sharePublish = MutableStateFlow(SharePublishState())
+
+    /** 分享页「在线听歌」区块的状态：由发布任务的事件推进，离开分享页也继续。 */
+    internal val sharePublish: StateFlow<SharePublishState> = _sharePublish
+
     /**
      * 发布一次在线分享：先在应用进程里准备音频（与下载同一条取流路径），再交给 WorkManager 上传。
      *
@@ -6684,7 +6695,6 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         lines: List<com.mytv.mymusic.data.share.ShareLyricSource>,
         selectedIndexes: Set<Int>,
         template: com.mytv.mymusic.data.ShareCardStyle,
-        quality: com.mytv.mymusic.data.native.AudioQuality,
         mode: com.mytv.mymusic.data.share.ShareMode,
         clip: com.mytv.mymusic.data.share.ShareClipRange?,
     ) = viewModelScope.launch {
@@ -6698,21 +6708,27 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             com.mytv.mymusic.data.share.buildShareMetadata(
                 song = song,
                 style = template,
-                quality = quality,
                 lines = lines,
                 selectedIndexes = selectedIndexes,
                 durationMs = song.duration.coerceAtLeast(0) * 1000L,
                 mode = mode,
                 clip = clip,
+                // 音质沿用下载设置，不再单独做选择面板
+                quality = AudioQuality.normalize(settingsState.value.audioQuality) ?: AudioQuality.Auto,
             )
         }.getOrElse { error ->
             message(error.message?.takeIf { it.isNotBlank() } ?: "分享内容不完整", error = true)
             return@launch
         }
 
+        val idempotencyKey = com.mytv.mymusic.data.share.newShareIdempotencyKey()
+        _sharePublish.value = _sharePublish.value.reduce(SharePublishEvent.Start) { idempotencyKey }
         message("正在准备音频…")
         val audio = runCatching { prepareShareAudio(song, context) }
             .getOrElse { error ->
+                _sharePublish.value = _sharePublish.value.reduce(
+                    SharePublishEvent.Failed(error.message?.takeIf { it.isNotBlank() } ?: "音频准备失败"),
+                )
                 message(error.message?.takeIf { it.isNotBlank() } ?: "音频准备失败", error = true)
                 return@launch
             }
@@ -6720,13 +6736,44 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             context,
             com.mytv.mymusic.data.share.SharePublishRequest(
                 serverUrl = origin,
-                idempotencyKey = com.mytv.mymusic.data.share.newShareIdempotencyKey(),
+                idempotencyKey = idempotencyKey,
                 metadata = metadata,
                 audioPath = audio.absolutePath,
                 audioType = com.mytv.mymusic.data.share.shareMediaType(audio.path),
             ),
         )
+        observeSharePublish(context, idempotencyKey)
         message("已开始上传「${song.title}」，可以离开这一页")
+    }
+
+    /** 跟着后台任务更新分享页的状态：成功回传链接，失败给原因，重试由用户点。 */
+    private fun observeSharePublish(context: Application, idempotencyKey: String) {
+        sharePublishJob?.cancel()
+        sharePublishJob = viewModelScope.launch {
+            val manager = BackgroundWork.get(context) ?: return@launch
+            manager.getWorkInfosForUniqueWorkFlow("SharePublishWorker-$idempotencyKey").collect { infos ->
+                val info = infos.firstOrNull() ?: return@collect
+                when (info.state) {
+                    WorkInfo.State.SUCCEEDED -> {
+                        val url = info.outputData.getString(com.mytv.mymusic.data.share.SharePublishWorker.KEY_URL).orEmpty()
+                        val status = info.outputData.getString(com.mytv.mymusic.data.share.SharePublishWorker.KEY_STATUS).orEmpty()
+                        _sharePublish.value = _sharePublish.value
+                            .reduce(SharePublishEvent.ServerAccepted)
+                            .let { if (status == "ready" && url.isNotBlank()) it.reduce(SharePublishEvent.Ready(url)) else it }
+                    }
+
+                    WorkInfo.State.FAILED, WorkInfo.State.CANCELLED -> _sharePublish.value = _sharePublish.value.reduce(
+                        SharePublishEvent.Failed(
+                            info.outputData.getString(com.mytv.mymusic.data.share.SharePublishWorker.KEY_ERROR)
+                                .orEmpty()
+                                .ifBlank { "上传失败" },
+                        ),
+                    )
+
+                    else -> Unit
+                }
+            }
+        }
     }
 
     /**

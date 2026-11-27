@@ -1,7 +1,7 @@
 package com.mytv.mymusic.data.share
 
 /** 音频片段在整首歌内的起止时间（毫秒）。 */
-internal data class ShareClipRange(val startMs: Long, val endMs: Long) {
+data class ShareClipRange(val startMs: Long, val endMs: Long) {
     val durationMs: Long get() = endMs - startMs
 }
 

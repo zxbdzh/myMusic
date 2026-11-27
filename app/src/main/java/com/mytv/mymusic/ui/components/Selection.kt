@@ -160,23 +160,29 @@ fun SelectionBar(
                     Text("下一首播放")
                 }
             }
-            FlowRow(
+            // 第二行：次要操作靠左，主操作贴右边缘，与第一行操作区右对齐，避免右侧空出一大块
+            Row(
                 Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                itemVerticalAlignment = Alignment.CenterVertically,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                onRemove?.let {
-                    TextButton(
-                        onClick = it,
-                        enabled = count > 0,
-                        modifier = Modifier.tvFocusRing(RoundedCornerShape(20.dp)),
-                    ) {
-                        Text("移除", color = MaterialTheme.colorScheme.error)
+                FlowRow(
+                    Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    itemVerticalAlignment = Alignment.CenterVertically,
+                ) {
+                    onRemove?.let {
+                        TextButton(
+                            onClick = it,
+                            enabled = count > 0,
+                            modifier = Modifier.tvFocusRing(RoundedCornerShape(20.dp)),
+                        ) {
+                            Text("移除", color = MaterialTheme.colorScheme.error)
+                        }
                     }
-                }
-                onUpload?.let {
-                    TextButton(it, enabled = count > 0, modifier = Modifier.tvFocusRing(RoundedCornerShape(20.dp))) {
-                        Text("上传")
+                    onUpload?.let {
+                        TextButton(it, enabled = count > 0, modifier = Modifier.tvFocusRing(RoundedCornerShape(20.dp))) {
+                            Text("上传")
+                        }
                     }
                 }
                 Button(

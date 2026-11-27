@@ -75,6 +75,18 @@ class SharePublishStateTest {
     }
 
     @Test
+    fun retryFromTheFailureScreenReusesTheSameKey() {
+        // 分享页的「重试」走的是新的发布请求：失败态必须能重新开始，而且沿用同一个幂等键
+        val failed = idle.start("key-1")
+            .reduce(SharePublishEvent.Failed("网络中断"))
+        val again = failed.start("key-2")
+        assertEquals(SharePublishPhase.Uploading, again.phase)
+        assertEquals("key-1", again.idempotencyKey)
+        assertEquals(2, again.attempts)
+        assertEquals("", again.error)
+    }
+
+    @Test
     fun failureKeepsTheKeySoRetryDoesNotDuplicate() {
         val failed = idle.start()
             .reduce(SharePublishEvent.Progress(0.6f))
@@ -154,3 +166,4 @@ class SharePublishStateTest {
         assertTrue(key != newShareIdempotencyKey())
     }
 }
+

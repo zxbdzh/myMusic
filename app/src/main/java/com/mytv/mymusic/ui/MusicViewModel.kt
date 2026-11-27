@@ -7032,8 +7032,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             return@launch
         }
 
-        val idempotencyKey = com.mytv.mymusic.data.share.newShareIdempotencyKey()
-        _sharePublish.value = _sharePublish.value.reduce(SharePublishEvent.Start) { idempotencyKey }
+        // 状态机自己决定复用还是新键（失败后重试沿用原键），这里只读回它定下的那个
+        _sharePublish.value = _sharePublish.value.reduce(SharePublishEvent.Start) {
+            com.mytv.mymusic.data.share.newShareIdempotencyKey()
+        }
+        val idempotencyKey = _sharePublish.value.idempotencyKey
         message("正在准备音频…")
         val audio = runCatching { prepareShareAudio(song, context) }
             .getOrElse { error ->

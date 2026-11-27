@@ -88,6 +88,14 @@ internal fun SharePublishState.reduce(
             error = "",
             attempts = attempts + 1,
         )
+        // 失败后点「重试」会再发一次发布请求：沿用同一个幂等键，避免超时后在服务端建出第二份
+        SharePublishPhase.Failed -> copy(
+            phase = SharePublishPhase.Uploading,
+            progress = 0f,
+            url = "",
+            error = "",
+            attempts = attempts + 1,
+        )
         else -> this
     }
 

@@ -2,6 +2,9 @@ package com.mytv.mymusic.desktop.state
 
 import androidx.compose.runtime.Immutable
 import com.mytv.mymusic.desktop.theme.Appearance
+import com.mytv.mymusic.playback.core.CrossfadeControl
+import com.mytv.mymusic.playback.core.EqualizerControl
+import com.mytv.mymusic.playback.core.SleepTimer
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -170,6 +173,16 @@ interface MusicStore {
     fun setAppearance(appearance: Appearance)
     fun clearNotice()
     fun dismissError()
+
+    // ---- 音频引擎高阶控制（透出自 :playback-vlc） ----
+    /** 10 段均衡器控制；原生后端未就绪或测试模拟态为 null。 */
+    val equalizer: EqualizerControl? get() = null
+
+    /** 自动接歌 / 交叉淡化控制；原生后端未就绪或测试模拟态为 null。 */
+    val crossfade: CrossfadeControl? get() = null
+
+    /** 定时关闭控制；原生后端未就绪或测试模拟态为 null。 */
+    val sleepTimer: SleepTimer? get() = null
 
     /** 退出时释放播放后端；窗口关闭时调用一次。 */
     fun shutdown()

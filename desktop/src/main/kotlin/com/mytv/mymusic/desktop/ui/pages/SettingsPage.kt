@@ -22,6 +22,8 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,6 +42,8 @@ import com.mytv.mymusic.desktop.ui.components.AppIconView
 import com.mytv.mymusic.desktop.ui.components.ExpressiveChip
 import com.mytv.mymusic.desktop.ui.components.PageHeader
 import com.mytv.mymusic.desktop.ui.components.PagePadding
+import com.mytv.mymusic.playback.core.CrossfadeMode
+import com.mytv.mymusic.playback.core.EqPresets
 
 /**
  * 设置页（对应 Android `ui/settings/SettingsScreen.kt` 的分组分段列表）。
@@ -187,6 +191,10 @@ fun SettingsPage(state: MusicUiState, store: MusicStore) {
         }
 
         item {
+            AudioEffectsCard(store)
+        }
+
+        item {
             SettingsCard("快捷键") {
                 ShortcutRow("空格", "播放 / 暂停")
                 ShortcutRow("← / →", "快退 / 快进 10 秒")
@@ -280,5 +288,118 @@ private fun ShortcutRow(keys: String, action: String) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+/**
+ * 音效与播放控制卡片：直接绑定 `:playback-vlc` 透出的均衡器、交叉淡化与定时关闭，
+ * 改动实时生效；原生后端未就绪（或离屏无声模式）时明示不可用原因。
+ */
+@Composable
+private fun AudioEffectsCard(store: MusicStore) {
+    val eq = store.equalizer
+    val xfade = store.crossfade
+    val timer = store.sleepTimer
+    SettingsCard("音效与播放控制") {
+        if (eq == null || xfade == null || timer == null) {
+            Text(
+                text = "当前音频后端未提供均衡器、交叉淡化与定时关闭（需要 libVLC 运行库就绪）。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            return@SettingsCard
+        }
+
+        val eqState by eq.state.collectAsState()
+        val xfadeState by xfade.settings.collectAsState()
+        val timerState by timer.state.collectAsState()
+
+        SettingRow("10 段均衡器") {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Switch(
+                    checked = eqState.enabled,
+                    onCheckedChange = eq::setEnabled,
+                )
+                Text(
+                    text = if (eqState.enabled) "已开启（${EqPresets.byId(eqState.presetId)?.label ?: "自定义"}）" else "已关闭",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        SettingRow("音效预设") {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                EqPresets.all.forEach { preset ->
+                    ExpressiveChip(
+                        label = preset.label,
+                        selected = eqState.presetId == preset.id,
+                        onClick = {
+                            if (!eqState.enabled) eq.setEnabled(true)
+                            eq.selectPreset(preset.id)
+                        },
+                    )
+                }
+            }
+        }
+
+        SettingRow("自动接歌") {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Switch(
+                    checked = xfadeState.enabled,
+                    onCheckedChange = { enabled -> xfade.configure(xfadeState.copy(enabled = enabled)) },
+                )
+                CrossfadeMode.entries.forEach { mode ->
+                    ExpressiveChip(
+                        label = mode.label,
+                        selected = xfadeState.mode == mode,
+                        onClick = {
+                            xfade.configure(xfadeState.copy(enabled = mode != CrossfadeMode.None, mode = mode))
+                        },
+                    )
+                }
+            }
+        }
+        if (xfadeState.enabled && xfadeState.mode != CrossfadeMode.None) {
+            SettingRow("淡化时长") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Slider(
+                        value = xfadeState.seconds.toFloat(),
+                        onValueChange = { sec -> xfade.configure(xfadeState.copy(seconds = sec.toInt().coerceIn(1, 15))) },
+                        valueRange = 1f..15f,
+                        steps = 13,
+                        modifier = Modifier.width(200.dp),
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        text = "${xfadeState.seconds} 秒",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+
+        SettingRow("定时关闭") {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ExpressiveChip(
+                    label = "关闭",
+                    selected = !timerState.active,
+                    onClick = timer::cancel,
+                )
+                listOf(15, 30, 45, 60).forEach { mins ->
+                    val selected = timerState.active && !timerState.endOfTrack && timerState.totalMs == mins * 60_000L
+                    ExpressiveChip(
+                        label = "${mins} 分钟",
+                        selected = selected,
+                        onClick = { timer.start(mins) },
+                    )
+                }
+                ExpressiveChip(
+                    label = "播完本曲",
+                    selected = timerState.active && timerState.endOfTrack,
+                    onClick = timer::stopAfterCurrent,
+                )
+            }
+        }
     }
 }

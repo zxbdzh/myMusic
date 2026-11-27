@@ -287,9 +287,16 @@ val pcChecksums by tasks.registering {
 compose.desktop {
     application {
         mainClass = "com.mytv.mymusic.desktop.MainKt"
-        // JDK 25 起 JNA（托盘/热键/SMTC 桥）加载 native 会打 Restricted method 警告，
+        // GPU 优先（ADR-0001）：Windows 显式锁定 Direct3D12 硬件渲染管线；
+        // 无 GPU / 远程桌面可用 -PpcRenderApi=SOFTWARE 降级，离屏 --screenshot 不受影响。
+        val renderApi = providers.gradleProperty("pcRenderApi").orElse("DIRECT3D").get()
+        // JDK 25 起 JNA（托盘/热键/SMTC 桥/vlcj）加载 native 会打 Restricted method 警告，
         // 打包与 run 都显式放行，避免用户以为出了问题
-        jvmArgs += listOf("--enable-native-access=ALL-UNNAMED", "-Dfile.encoding=UTF-8")
+        jvmArgs += listOf(
+            "--enable-native-access=ALL-UNNAMED",
+            "-Dfile.encoding=UTF-8",
+            "-Dskiko.renderApi=$renderApi",
+        )
 
         // 悬浮歌词窗、托盘、全局热键都是 Windows 专属实现，其它平台启动时自动降级；
         // appResourcesRootDir 在 CMP 1.12 属于 nativeDistributions（AbstractDistributions），
@@ -307,13 +314,30 @@ compose.desktop {
             windows {
                 menuGroup = "myMusic"
                 upgradeUuid = "0c6f1a9a-6d8d-4bb6-b1f5-9a7d1f3d2c11"
-                // 依赖本机 VLC（下一步随包分发 libvlc 后改为 false）
+                // libVLC 已随包分发（stageVlcRuntime），用户无需单独装 VLC
                 dirChooser = true
                 perUserInstall = true
                 // 托盘/热键/任务栏按钮都要按 DPI 缩放取图标，声明 PerMonitorV2 避免模糊
                 iconFile.set(project.file("icons/app.ico"))
             }
         }
+    }
+}
+
+// 开发态 run 直接接入随包 libVLC（已缓存时跳过），保证 `./gradlew :desktop:run` 开箱即真出声
+tasks.matching { it.name == "run" }.configureEach {
+    dependsOn(fetchVlcRuntime)
+    if (this is JavaExec) {
+        jvmArgs("-DmyMusic.vlc.home=${vlcRuntimeDir.get().asFile.absolutePath}")
+    }
+}
+
+// 单测放行 native 访问，并把已缓存的随包 libVLC 路径透给真实引擎契约测试
+tasks.withType<Test>().configureEach {
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    val vlcDir = vlcRuntimeDir.get().asFile
+    if (File(vlcDir, "libvlc.dll").isFile) {
+        systemProperty("myMusic.vlc.home", vlcDir.absolutePath)
     }
 }
 

@@ -575,7 +575,11 @@ private object ScreenshotRunner {
         } else {
             AcceptanceCatalog(liveCatalog, shot.acceptanceFixture)
         }
-        val store = DefaultMusicStore(catalog = catalog)
+        // 离屏截图只渲染 UI 静态帧，显式注入无声模拟后端，避免后台出声打扰桌面
+        val store = DefaultMusicStore(
+            catalog = catalog,
+            audioFactory = com.mytv.mymusic.desktop.state.audio.AudioOutputs::simulated,
+        )
         try {
             runBlocking {
                 store.bootstrap()

@@ -22,7 +22,11 @@ import org.junit.Test
 class EndToEndSmokeTest {
 
     private fun newStore(): DefaultMusicStore =
-        DefaultMusicStore(catalog = CoreMusicCatalog(DesktopPaths()))
+        DefaultMusicStore(
+            catalog = CoreMusicCatalog(DesktopPaths()),
+            // 冒烟测试验证搜索与状态推进链路，不依赖声卡与音频外链带宽
+            audioFactory = com.mytv.mymusic.desktop.state.audio.AudioOutputs::simulated,
+        )
 
     /** 轮询等待状态条件，超时返回最后一次读到的值。 */
     private suspend fun awaitState(

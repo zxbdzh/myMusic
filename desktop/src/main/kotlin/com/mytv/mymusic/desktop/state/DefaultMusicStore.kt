@@ -2,7 +2,6 @@ package com.mytv.mymusic.desktop.state
 
 import com.mytv.mymusic.desktop.state.audio.AudioOutput
 import com.mytv.mymusic.desktop.state.audio.AudioOutputs
-import com.mytv.mymusic.desktop.state.audio.VlcAudioOutput
 import com.mytv.mymusic.desktop.state.usecase.ChartsUseCase
 import com.mytv.mymusic.desktop.state.usecase.LibraryUseCase
 import com.mytv.mymusic.desktop.state.usecase.PlaybackUseCase
@@ -10,6 +9,9 @@ import com.mytv.mymusic.desktop.state.usecase.PlaylistsUseCase
 import com.mytv.mymusic.desktop.state.usecase.SearchUseCase
 import com.mytv.mymusic.desktop.state.usecase.readable
 import com.mytv.mymusic.desktop.theme.Appearance
+import com.mytv.mymusic.playback.core.CrossfadeControl
+import com.mytv.mymusic.playback.core.EqualizerControl
+import com.mytv.mymusic.playback.core.SleepTimer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -37,6 +39,8 @@ class DefaultMusicStore(
     private val catalog: MusicCatalog = DemoMusicCatalog(),
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     initialAppearance: Appearance = Appearance(),
+    /** 音频后端工厂：生产默认走真实 libVLC（缺库明确报错不假播）；离屏截图与单测可显式注入模拟后端。 */
+    audioFactory: (CoroutineScope) -> AudioOutput = AudioOutputs::create,
 ) : MusicStore {
 
     private val chartsUseCase = ChartsUseCase(catalog)
@@ -44,9 +48,12 @@ class DefaultMusicStore(
     private val searchUseCase = SearchUseCase(catalog)
     private val libraryUseCase = LibraryUseCase(catalog)
 
-    /** 播放后端：有 libVLC 用 libVLC，否则模拟输出。UI 上会如实显示是哪一个。 */
-    private val audio: AudioOutput = AudioOutputs.create(scope)
+    private val audio: AudioOutput = audioFactory(scope)
     private val playback = PlaybackUseCase(catalog, audio, scope)
+
+    override val equalizer: EqualizerControl? get() = audio.equalizer
+    override val crossfade: CrossfadeControl? get() = audio.crossfade
+    override val sleepTimer: SleepTimer? get() = audio.sleepTimer
 
     private val _state = MutableStateFlow(
         MusicUiState(
@@ -55,7 +62,7 @@ class DefaultMusicStore(
             providerName = providerName(catalog.defaultProviderId),
             engine = EngineUiState(
                 backend = audio.label,
-                ready = audio is VlcAudioOutput,
+                ready = audio.ready,
                 note = audio.detail,
             ),
             appearance = initialAppearance,

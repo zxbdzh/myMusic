@@ -158,10 +158,11 @@ internal object LxScriptHeaders {
 internal const val MAX_SCRIPT_BYTES = 2 * 1024 * 1024
 
 /**
- * 能力表解析规则的版本：解析层多认识一个平台（v2 加了汽水 qs）就加一。
+ * 能力表解析规则的版本：解析层多认识一个平台就加一。
  * 脚本没变，老记录的能力表却缺这个平台，只能靠版本号判断要不要重探。
+ * v2 加了汽水 qs 的 Kotlin 侧映射；v3 补上 preload 白名单（v2 的历史记录探过但仍是空的）。
  */
-internal const val LX_CAPABILITY_SCHEMA_VERSION = 2
+internal const val LX_CAPABILITY_SCHEMA_VERSION = 3
 
 /** 桌面插件没有平台能力表，永远不用重探。 */
 internal fun LxSourceRecord.needsCapabilityRefresh(): Boolean =

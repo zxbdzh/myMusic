@@ -99,6 +99,9 @@ jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 javet = { module = "com.caoccao.javet:javet", version.ref = "javet" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinxCoroutines" }
 androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
+# :core（纯 JVM）用的两个变体：sqlite-bundled 是 ROOM-SPIKE 验证过的桌面驱动（坑①：room-ktx 是 Android-only，JVM 不许带）
+androidx-datastore-preferences-core = { module = "androidx.datastore:datastore-preferences-core", version.ref = "datastore" }
+androidx-sqlite-bundled = { module = "androidx.sqlite:sqlite-bundled", version = "2.7.1" }
 androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
 androidx-room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
 androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }

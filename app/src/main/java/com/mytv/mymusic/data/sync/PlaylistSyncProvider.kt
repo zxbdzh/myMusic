@@ -18,11 +18,7 @@ import java.io.IOException
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 
-/** Precondition：带条件的写入被拒（WebDAV 412），说明读完到写入之间云端被别的设备改了。 */
-enum class SyncFailureKind { Auth, Permission, NotFound, Network, Corrupt, Precondition, Unknown }
-
-class SyncException(val kind: SyncFailureKind, override val message: String) : Exception(message)
-
+// SyncFailureKind / SyncException 已搬到 :core 的 data/sync/SyncErrors.kt（SyncModels 合并逻辑与各同步位置实现共用）。
 data class RemoteAccount(val id: String, val login: String)
 
 data class RemoteFile(

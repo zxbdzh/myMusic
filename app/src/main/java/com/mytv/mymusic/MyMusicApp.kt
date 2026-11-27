@@ -10,6 +10,8 @@ import androidx.media3.datasource.cache.SimpleCache
 import androidx.work.Configuration
 import com.mytv.mymusic.data.AppDatabase
 import com.mytv.mymusic.data.AccountProfileStore
+import com.mytv.mymusic.data.appSettingsStore
+import com.mytv.mymusic.data.createAppDatabase
 import com.mytv.mymusic.data.ListenTaskStore
 import com.mytv.mymusic.data.MusicRepository
 import com.mytv.mymusic.data.SettingsStore
@@ -152,8 +154,8 @@ class MyMusicApp : Application(), ViewModelStoreOwner, Configuration.Provider {
             override fun onActivityDestroyed(activity: android.app.Activity) {}
         })
         repository = MusicRepository()
-        settings = SettingsStore(this)
-        database = AppDatabase.create(this)
+        settings = appSettingsStore(this)
+        database = createAppDatabase(this)
         subsonic = SubsonicManager(this, settings, appScope, database)
         cacheEvictor = AdjustableLruEvictor(defaultCacheLimitMb() * MB)
         mediaCache = createMediaCache()

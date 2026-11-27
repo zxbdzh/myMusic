@@ -1,41 +1,15 @@
 package com.mytv.mymusic.data
 
-import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
-import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
-import androidx.room.ColumnInfo
-import androidx.room.Dao
-import androidx.room.Database
-import androidx.room.Entity
-import androidx.room.ForeignKey
-import androidx.room.Index
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy
-import androidx.room.PrimaryKey
-import androidx.room.Query
-import androidx.room.Room
-import androidx.room.RoomDatabase
-import androidx.room.Transaction
-import androidx.room.Upsert
-import androidx.room.migration.Migration
-import androidx.sqlite.db.SupportSQLiteDatabase
 import com.mytv.mymusic.aggregate.AggregationSettings
 import com.mytv.mymusic.data.local.LocalMusicSettings
-import com.mytv.mymusic.data.local.LocalTrackDao
-import com.mytv.mymusic.data.local.LocalRefDao
-import com.mytv.mymusic.data.local.LocalRefEntity
-import com.mytv.mymusic.data.local.LocalRemoteEntity
-import com.mytv.mymusic.data.local.LocalTrackEntity
-import com.mytv.mymusic.data.local.LocalUploadDao
-import com.mytv.mymusic.data.local.LocalUploadEntity
-import com.mytv.mymusic.data.subsonic.SubsonicTrackDao
-import com.mytv.mymusic.data.subsonic.SubsonicTrackEntity
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -43,12 +17,16 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import java.util.UUID
 
-private val Context.dataStore by preferencesDataStore("mymusic")
+// 同包的 MirrorKind / MirrorRoute / TIER_* 常量在 MirrorRoutes.kt（从 app 侧 GithubMirrorRoutes.kt
+// 拆出来的纯数据部分）；import 写全是为了让「谁在哪」一眼可见，Kotlin 同包其实不用 import。
 
-// 每首歌的随机结果和速度单独一个文件：切一首歌写一次，放进主设置会让整个界面跟着收到一次新设置
-private val Context.lyricMemoryStore by preferencesDataStore("lyric_memory")
+// 设置项：从 AppStore.kt 拆出来独立成文件（Room 部分见 data/AppDatabase.kt）。
+// 搬进 :core 后不再持有 Context —— 两个 DataStore 由平台层创建后注入：
+// Android 用 preferencesDataStore 委托（仍是 mymusic / lyric_memory 两个文件，用户设置不丢），
+// 桌面用 PreferenceDataStoreFactory 创建。
+// 同包引用：MirrorKind / MirrorRoute / TIER_* 在 MirrorRoutes.kt，PosterPrefs 在 PosterSettings.kt，
+// SwipePrefsCodec / SharePrefsCodec 各在自己的文件里。
 
 @Serializable
 data class EqBandSetting(val freqHz: Int = 0, val gainDb: Float = 0f)
@@ -152,9 +130,9 @@ data class StagePreset(
 
 /**
  * 读预设：丢掉 id 不是 `base#xxxx`、和 base 对不上、base 是经典、名字空着的条目，同一个 id 只留第一个。
- * base 模式还在不在由界面判断（删掉的模式的预设不显示，也认不出）。
+ * base 模式还在不在由界面判断（删掉的模式的预设不显示，也认不出）。app 侧 ui 测试也用，跨模块开放。
  */
-internal fun decodePresets(raw: String?): List<StagePreset> {
+fun decodePresets(raw: String?): List<StagePreset> {
     if (raw.isNullOrBlank()) return emptyList()
     val all = runCatching { presetJson.decodeFromString<List<StagePreset>>(raw) }.getOrDefault(emptyList())
     return all.filter { preset ->
@@ -170,11 +148,11 @@ data class LyricMemoryEntry(val mode: String = "", val bpm: Float = 0f)
 
 const val LYRIC_MEMORY_LIMIT = 2000
 
-/** JSON 字符串数组 → 集合；读不出来（没写过、格式不对）时为空。 */
-internal fun decodeStringSet(raw: String?): Set<String> = decodeStringList(raw).toSet()
+/** JSON 字符串数组 → 集合；读不出来（没写过、格式不对）时为空。app 侧 ui 测试也用，跨模块开放。 */
+fun decodeStringSet(raw: String?): Set<String> = decodeStringList(raw).toSet()
 
 /** JSON 字符串数组 → 列表（保持顺序）；读不出来时为空。 */
-internal fun decodeStringList(raw: String?): List<String> =
+fun decodeStringList(raw: String?): List<String> =
     if (raw.isNullOrBlank()) emptyList() else runCatching { Json.decodeFromString<List<String>>(raw) }.getOrDefault(emptyList())
 
 /** 播放页封面形状：随机（每次切歌换一种，不和上一首重复）或固定成某一种 MaterialShapes。 */
@@ -269,7 +247,12 @@ private fun String?.toCollectionView(): CollectionView =
 private fun String?.toMiniPlayerTarget(): MiniPlayerTarget =
     MiniPlayerTarget.entries.firstOrNull { it.name == this } ?: MiniPlayerTarget.Player
 
-class SettingsStore(private val context: Context) {
+class SettingsStore(
+    /** 主设置文件（Android 是 `mymusic.preferences_pb`，桌面对应 %APPDATA%\myMusic\mymusic.preferences_pb）。 */
+    private val store: DataStore<Preferences>,
+    /** 每首歌的歌词记忆：写得很频繁，单独一个文件，避免整个界面跟着收到新设置。 */
+    private val lyricMemory: DataStore<Preferences>,
+) {
     private val providerKey = stringPreferencesKey("provider")
     private val chartsSourceKey = stringPreferencesKey("charts_source")
     private val playlistsSourceKey = stringPreferencesKey("playlists_source")
@@ -370,7 +353,7 @@ class SettingsStore(private val context: Context) {
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
-    val state: Flow<AppSettings> = context.dataStore.data.map { values ->
+    val state: Flow<AppSettings> = store.data.map { values ->
         AppSettings(
             provider = values[providerKey] ?: "netease",
             chartsSource = values[chartsSourceKey] ?: "",
@@ -462,76 +445,76 @@ class SettingsStore(private val context: Context) {
         )
     }
 
-    suspend fun provider(value: String) = context.dataStore.edit { it[providerKey] = value }
-    suspend fun chartsSource(value: String) = context.dataStore.edit { it[chartsSourceKey] = value }
-    suspend fun playlistsSource(value: String) = context.dataStore.edit { it[playlistsSourceKey] = value }
-    suspend fun startupTab(value: String) = context.dataStore.edit { it[startupTabKey] = value }
-    suspend fun playlistsMode(value: String) = context.dataStore.edit { it[playlistsModeKey] = value }
-    suspend fun listenGroup(value: String) = context.dataStore.edit { it[listenGroupKey] = value }
-    suspend fun theme(value: String) = context.dataStore.edit { it[themeKey] = value }
-    suspend fun layoutMode(value: String) = context.dataStore.edit { it[layoutModeKey] = value }
-    suspend fun dynamicColor(value: Boolean) = context.dataStore.edit { it[dynamicColorKey] = value }
-    suspend fun reduceMotion(value: Boolean) = context.dataStore.edit { it[reduceMotionKey] = value }
-    suspend fun volumeNormalization(value: Boolean) = context.dataStore.edit { it[volumeNormalizationKey] = value }
-    suspend fun audioQuality(value: String) = context.dataStore.edit { it[audioQualityKey] = value }
-    suspend fun showBottomNav(value: Boolean) = context.dataStore.edit { it[showBottomNavKey] = value }
-    suspend fun colorSource(value: String) = context.dataStore.edit { it[colorSourceKey] = value }
-    suspend fun customSeed(value: Int) = context.dataStore.edit { it[customSeedKey] = value }
-    suspend fun browseStyle(value: String) = context.dataStore.edit { it[browseStyleKey] = value }
-    suspend fun playerStyle(value: String) = context.dataStore.edit { it[playerStyleKey] = value }
-    suspend fun contrast(value: Float) = context.dataStore.edit { it[contrastKey] = value }
-    suspend fun fontScale(value: Float) = context.dataStore.edit { it[fontScaleKey] = value }
-    suspend fun amoled(value: Boolean) = context.dataStore.edit { it[amoledKey] = value }
-    suspend fun blurMode(value: String) = context.dataStore.edit { it[blurModeKey] = value }
-    suspend fun lyricsBackground(value: LyricsBackgroundMode) = context.dataStore.edit { it[lyricsBackgroundKey] = value.name }
-    suspend fun notificationLyrics(value: Boolean) = context.dataStore.edit { it[notificationLyricsKey] = value }
-    suspend fun floatingLyricsEnabled(value: Boolean) = context.dataStore.edit { it[floatingLyricsEnabledKey] = value }
-    suspend fun lyriconProviderEnabled(value: Boolean) = context.dataStore.edit { it[lyriconProviderEnabledKey] = value }
-    suspend fun lyriconSubscriberEnabled(value: Boolean) = context.dataStore.edit { it[lyriconSubscriberEnabledKey] = value }
-    suspend fun rhythmIntensity(value: RhythmIntensity) = context.dataStore.edit { it[rhythmIntensityKey] = value.name }
-    suspend fun coverShape(value: CoverShapeChoice) = context.dataStore.edit { it[coverShapeKey] = value.name }
-    suspend fun tvAmbientClock(value: Boolean) = context.dataStore.edit { it[tvAmbientClockKey] = value }
-    suspend fun tabletopTop(value: TabletopTop) = context.dataStore.edit { it[tabletopTopKey] = value.name }
-    suspend fun keepScreenOn(value: Boolean) = context.dataStore.edit { it[keepScreenOnKey] = value }
-    suspend fun tvBackgroundPlay(value: Boolean) = context.dataStore.edit { it[tvBackgroundPlayKey] = value }
+    suspend fun provider(value: String) = store.edit { it[providerKey] = value }
+    suspend fun chartsSource(value: String) = store.edit { it[chartsSourceKey] = value }
+    suspend fun playlistsSource(value: String) = store.edit { it[playlistsSourceKey] = value }
+    suspend fun startupTab(value: String) = store.edit { it[startupTabKey] = value }
+    suspend fun playlistsMode(value: String) = store.edit { it[playlistsModeKey] = value }
+    suspend fun listenGroup(value: String) = store.edit { it[listenGroupKey] = value }
+    suspend fun theme(value: String) = store.edit { it[themeKey] = value }
+    suspend fun layoutMode(value: String) = store.edit { it[layoutModeKey] = value }
+    suspend fun dynamicColor(value: Boolean) = store.edit { it[dynamicColorKey] = value }
+    suspend fun reduceMotion(value: Boolean) = store.edit { it[reduceMotionKey] = value }
+    suspend fun volumeNormalization(value: Boolean) = store.edit { it[volumeNormalizationKey] = value }
+    suspend fun audioQuality(value: String) = store.edit { it[audioQualityKey] = value }
+    suspend fun showBottomNav(value: Boolean) = store.edit { it[showBottomNavKey] = value }
+    suspend fun colorSource(value: String) = store.edit { it[colorSourceKey] = value }
+    suspend fun customSeed(value: Int) = store.edit { it[customSeedKey] = value }
+    suspend fun browseStyle(value: String) = store.edit { it[browseStyleKey] = value }
+    suspend fun playerStyle(value: String) = store.edit { it[playerStyleKey] = value }
+    suspend fun contrast(value: Float) = store.edit { it[contrastKey] = value }
+    suspend fun fontScale(value: Float) = store.edit { it[fontScaleKey] = value }
+    suspend fun amoled(value: Boolean) = store.edit { it[amoledKey] = value }
+    suspend fun blurMode(value: String) = store.edit { it[blurModeKey] = value }
+    suspend fun lyricsBackground(value: LyricsBackgroundMode) = store.edit { it[lyricsBackgroundKey] = value.name }
+    suspend fun notificationLyrics(value: Boolean) = store.edit { it[notificationLyricsKey] = value }
+    suspend fun floatingLyricsEnabled(value: Boolean) = store.edit { it[floatingLyricsEnabledKey] = value }
+    suspend fun lyriconProviderEnabled(value: Boolean) = store.edit { it[lyriconProviderEnabledKey] = value }
+    suspend fun lyriconSubscriberEnabled(value: Boolean) = store.edit { it[lyriconSubscriberEnabledKey] = value }
+    suspend fun rhythmIntensity(value: RhythmIntensity) = store.edit { it[rhythmIntensityKey] = value.name }
+    suspend fun coverShape(value: CoverShapeChoice) = store.edit { it[coverShapeKey] = value.name }
+    suspend fun tvAmbientClock(value: Boolean) = store.edit { it[tvAmbientClockKey] = value }
+    suspend fun tabletopTop(value: TabletopTop) = store.edit { it[tabletopTopKey] = value.name }
+    suspend fun keepScreenOn(value: Boolean) = store.edit { it[keepScreenOnKey] = value }
+    suspend fun tvBackgroundPlay(value: Boolean) = store.edit { it[tvBackgroundPlayKey] = value }
     suspend fun rhythmOffsetMs(value: Int) =
-        context.dataStore.edit { it[rhythmOffsetKey] = value.coerceIn(-RHYTHM_OFFSET_MAX_MS, RHYTHM_OFFSET_MAX_MS) }
-    suspend fun rhythmDebug(value: Boolean) = context.dataStore.edit { it[rhythmDebugKey] = value }
-    suspend fun collectionView(value: CollectionView) = context.dataStore.edit { it[collectionViewKey] = value.name }
-    suspend fun miniPlayerTarget(value: MiniPlayerTarget) = context.dataStore.edit { it[miniPlayerTargetKey] = value.name }
-    suspend fun playReportEnabled(value: Boolean) = context.dataStore.edit { it[playReportEnabledKey] = value }
+        store.edit { it[rhythmOffsetKey] = value.coerceIn(-RHYTHM_OFFSET_MAX_MS, RHYTHM_OFFSET_MAX_MS) }
+    suspend fun rhythmDebug(value: Boolean) = store.edit { it[rhythmDebugKey] = value }
+    suspend fun collectionView(value: CollectionView) = store.edit { it[collectionViewKey] = value.name }
+    suspend fun miniPlayerTarget(value: MiniPlayerTarget) = store.edit { it[miniPlayerTargetKey] = value.name }
+    suspend fun playReportEnabled(value: Boolean) = store.edit { it[playReportEnabledKey] = value }
 
     /** 酷狗概念版「听歌领会员」的自动领取开关。 */
-    suspend fun kugouWelfareAuto(value: Boolean) = context.dataStore.edit { it[kugouWelfareAutoKey] = value }
+    suspend fun kugouWelfareAuto(value: Boolean) = store.edit { it[kugouWelfareAutoKey] = value }
 
     /** 记一次自动领取的日期（北京时间），同一天不再重复打接口。 */
     suspend fun kugouWelfareLastClaimDate(value: String) =
-        context.dataStore.edit { it[kugouWelfareLastDateKey] = value }
+        store.edit { it[kugouWelfareLastDateKey] = value }
 
     /**
      * 汽水上报的设备标识：第一次用随机值落盘，之后一直复用。
      * 官方客户端靠它把同一个人的播放行为串起来，每次启动都换就等于没有历史。
      */
     suspend fun sodaReportDeviceId(): String {
-        val existing = context.dataStore.data.first()[sodaReportDeviceIdKey]
+        val existing = store.data.first()[sodaReportDeviceIdKey]
         if (!existing.isNullOrBlank()) return existing
         val generated = java.util.UUID.randomUUID().toString().replace("-", "")
-        context.dataStore.edit { it[sodaReportDeviceIdKey] = generated }
+        store.edit { it[sodaReportDeviceIdKey] = generated }
         return generated
     }
-    suspend fun lastSeed(value: Int) = context.dataStore.edit { it[lastSeedKey] = value }
-    suspend fun sleepFade(value: Boolean) = context.dataStore.edit { it[sleepFadeKey] = value }
-    suspend fun crossfadeEnabled(value: Boolean) = context.dataStore.edit { it[crossfadeEnabledKey] = value }
-    suspend fun crossfadeSeconds(value: Int) = context.dataStore.edit { it[crossfadeSecondsKey] = value.coerceIn(4, 10) }
+    suspend fun lastSeed(value: Int) = store.edit { it[lastSeedKey] = value }
+    suspend fun sleepFade(value: Boolean) = store.edit { it[sleepFadeKey] = value }
+    suspend fun crossfadeEnabled(value: Boolean) = store.edit { it[crossfadeEnabledKey] = value }
+    suspend fun crossfadeSeconds(value: Int) = store.edit { it[crossfadeSecondsKey] = value.coerceIn(4, 10) }
     suspend fun crossfadeAnimation(value: CrossfadeAnimation) =
-        context.dataStore.edit { it[crossfadeAnimationKey] = value.name }
+        store.edit { it[crossfadeAnimationKey] = value.name }
     suspend fun crossfadeMode(value: CrossfadeMode) =
-        context.dataStore.edit { it[crossfadeModeKey] = value.name }
-    suspend fun cacheLimitMb(value: Int) = context.dataStore.edit { it[cacheLimitKey] = value }
-    suspend fun githubMirror(value: GithubMirror) = context.dataStore.edit { it[githubMirrorKey] = value.name }
+        store.edit { it[crossfadeModeKey] = value.name }
+    suspend fun cacheLimitMb(value: Int) = store.edit { it[cacheLimitKey] = value }
+    suspend fun githubMirror(value: GithubMirror) = store.edit { it[githubMirrorKey] = value.name }
 
     /** 墙内设置：在同一次 edit 里读出当前值再写回，连着点两个开关也不会互相覆盖。 */
-    suspend fun poster(transform: (PosterPrefs) -> PosterPrefs) = context.dataStore.edit {
+    suspend fun poster(transform: (PosterPrefs) -> PosterPrefs) = store.edit {
         val value = transform(posterPrefs(it))
         it[posterTintKey] = value.tint.name
         it[posterLightsOutKey] = value.lightsOut
@@ -545,12 +528,12 @@ class SettingsStore(private val context: Context) {
     }
 
     /** 滑动操作（设置 › 滑动操作）：只在本机，不进同步。 */
-    suspend fun swipe(transform: (SwipePrefs) -> SwipePrefs) = context.dataStore.edit {
+    suspend fun swipe(transform: (SwipePrefs) -> SwipePrefs) = store.edit {
         SwipePrefsCodec.write(it, transform(SwipePrefsCodec.read(it)))
     }
 
     /** 歌词分享页的选项：只在本机，不进同步。 */
-    suspend fun share(transform: (SharePrefs) -> SharePrefs) = context.dataStore.edit {
+    suspend fun share(transform: (SharePrefs) -> SharePrefs) = store.edit {
         SharePrefsCodec.write(it, transform(SharePrefsCodec.read(it)))
     }
 
@@ -587,7 +570,7 @@ class SettingsStore(private val context: Context) {
     )
 
     /** 全屏歌词动画的设置：同一次 edit 里读出当前值再写回，连着改几项不会互相覆盖。 */
-    suspend fun lyricStage(transform: (LyricStagePrefs) -> LyricStagePrefs) = context.dataStore.edit {
+    suspend fun lyricStage(transform: (LyricStagePrefs) -> LyricStagePrefs) = store.edit {
         val value = transform(lyricStagePrefs(it))
         it[lyricVisualizerKey] = value.visualizer
         it[lyricVisualizerAutoKey] = value.auto.name
@@ -602,12 +585,12 @@ class SettingsStore(private val context: Context) {
         it[lyricStagePresetsKey] = json.encodeToString(value.presets)
     }
 
-    suspend fun lyricFonts(primaryName: String? = null, fallbackName: String? = null) = context.dataStore.edit {
+    suspend fun lyricFonts(primaryName: String? = null, fallbackName: String? = null) = store.edit {
         primaryName?.let { name -> it[lyricFontPrimaryKey] = name }
         fallbackName?.let { name -> it[lyricFontFallbackKey] = name }
     }
 
-    suspend fun lyricText(transform: (LyricTextPrefs) -> LyricTextPrefs) = context.dataStore.edit {
+    suspend fun lyricText(transform: (LyricTextPrefs) -> LyricTextPrefs) = store.edit {
         val current = LyricTextPrefs(
             splitBilingual = it[lyricSplitBilingualKey] ?: false,
             traditional = it[lyricTraditionalKey] ?: false,
@@ -622,13 +605,13 @@ class SettingsStore(private val context: Context) {
     /** 这首歌记下的随机结果和速度；没记过返回 null。 */
     suspend fun lyricMemory(songKey: String): LyricMemoryEntry? {
         if (songKey.isBlank()) return null
-        return decodeLyricMemory(context.lyricMemoryStore.data.first()[lyricVisualizerMemoryKey])[songKey]
+        return decodeLyricMemory(lyricMemory.data.first()[lyricVisualizerMemoryKey])[songKey]
     }
 
     /** 更新这首歌的记录并挪到最新；超过 [LYRIC_MEMORY_LIMIT] 首时丢掉最久没听的。 */
     suspend fun rememberLyric(songKey: String, update: (LyricMemoryEntry) -> LyricMemoryEntry) {
         if (songKey.isBlank()) return
-        context.lyricMemoryStore.edit {
+        lyricMemory.edit {
             val memory = decodeLyricMemory(it[lyricVisualizerMemoryKey])
             val entry = update(memory.remove(songKey) ?: LyricMemoryEntry())
             memory[songKey] = entry
@@ -639,14 +622,14 @@ class SettingsStore(private val context: Context) {
 
     /** 记着随机结果（模式不为空）的歌有几首。 */
     suspend fun lyricMemoryModeCount(): Int =
-        decodeLyricMemory(context.lyricMemoryStore.data.first()[lyricVisualizerMemoryKey]).values.count { it.mode.isNotEmpty() }
+        decodeLyricMemory(lyricMemory.data.first()[lyricVisualizerMemoryKey]).values.count { it.mode.isNotEmpty() }
 
     /**
      * 忘掉所有随机结果：模式清空、测到的速度留着，只剩模式的整条删掉。返回“歌曲 key → 原来的模式”，撤销时交给 [restoreLyricModes]。
      */
     suspend fun forgetLyricModes(): Map<String, String> {
         val forgotten = LinkedHashMap<String, String>()
-        context.lyricMemoryStore.edit {
+        lyricMemory.edit {
             val memory = decodeLyricMemory(it[lyricVisualizerMemoryKey])
             val kept = LinkedHashMap<String, LyricMemoryEntry>()
             for ((key, entry) in memory) {
@@ -661,7 +644,7 @@ class SettingsStore(private val context: Context) {
     /** 撤销 [forgetLyricModes]：只写回现在模式还空着的歌（这期间重新抽过的不动），不改顺序，超出上限时丢最久的。 */
     suspend fun restoreLyricModes(modes: Map<String, String>) {
         if (modes.isEmpty()) return
-        context.lyricMemoryStore.edit {
+        lyricMemory.edit {
             val memory = decodeLyricMemory(it[lyricVisualizerMemoryKey])
             val restored = LinkedHashMap<String, LyricMemoryEntry>()
             // 按原来的先后排回去：撤销的条目在前（更早），这期间新记的在后
@@ -680,21 +663,21 @@ class SettingsStore(private val context: Context) {
         runCatching { LinkedHashMap(json.decodeFromString<Map<String, LyricMemoryEntry>>(raw ?: "{}")) }
             .getOrDefault(LinkedHashMap())
 
-    suspend fun sodaSigner(url: String, token: String, enabled: Boolean = true) = context.dataStore.edit {
+    suspend fun sodaSigner(url: String, token: String, enabled: Boolean = true) = store.edit {
         it[sodaSignerUrlKey] = url.trim()
         it[sodaSignerTokenKey] = token.trim()
         it[sodaSignerEnabledKey] = enabled
     }
 
-    suspend fun thirdPartyLyrics(enabled: Boolean) = context.dataStore.edit {
+    suspend fun thirdPartyLyrics(enabled: Boolean) = store.edit {
         it[thirdPartyLyricsKey] = enabled
     }
 
-    suspend fun metadataFallback(enabled: Boolean) = context.dataStore.edit {
+    suspend fun metadataFallback(enabled: Boolean) = store.edit {
         it[metadataFallbackKey] = enabled
     }
 
-    suspend fun cookie(provider: String, cookie: String) = context.dataStore.edit {
+    suspend fun cookie(provider: String, cookie: String) = store.edit {
         val current = runCatching {
             json.decodeFromString<Map<String, String>>(it[cookiesKey] ?: "{}")
         }.getOrDefault(emptyMap()).toMutableMap()
@@ -707,10 +690,10 @@ class SettingsStore(private val context: Context) {
         it[cookieUpdatedAtKey] = json.encodeToString(updatedAt)
     }
 
-    /** 只有当前值仍等于调用方读到的那一份才写入，避免迟到的认证探测覆盖删除或新账号配置。 */
-    internal suspend fun cookieIfCurrent(provider: String, expectedRaw: String, cookie: String): Boolean {
+    /** 只有当前值仍等于调用方读到的那一份才写入，避免迟到的认证探测覆盖删除或新账号配置。app 侧 SubsonicManager 也要用，跨模块开放。 */
+    suspend fun cookieIfCurrent(provider: String, expectedRaw: String, cookie: String): Boolean {
         var written = false
-        context.dataStore.edit {
+        store.edit {
             val current = runCatching {
                 json.decodeFromString<Map<String, String>>(it[cookiesKey] ?: "{}")
             }.getOrDefault(emptyMap()).toMutableMap()
@@ -729,7 +712,7 @@ class SettingsStore(private val context: Context) {
 
     /** 同步读取 Cookie 和修改时间，避免两次 DataStore 读取之间出现不一致。 */
     suspend fun cookieSnapshot(): CookieSnapshot {
-        val values = context.dataStore.data.first()
+        val values = store.data.first()
         return CookieSnapshot(
             cookies = runCatching {
                 json.decodeFromString<Map<String, String>>(values[cookiesKey] ?: "{}")
@@ -748,7 +731,7 @@ class SettingsStore(private val context: Context) {
         active: Map<String, String>,
         updatedAt: Map<String, Long>,
         removeAbsent: Boolean,
-    ) = context.dataStore.edit {
+    ) = store.edit {
         val current = runCatching {
             json.decodeFromString<Map<String, String>>(it[cookiesKey] ?: "{}")
         }.getOrDefault(emptyMap()).toMutableMap()
@@ -771,24 +754,24 @@ class SettingsStore(private val context: Context) {
         it[cookieUpdatedAtKey] = json.encodeToString(times)
     }
 
-    suspend fun saveAggregation(value: AggregationSettings) = context.dataStore.edit {
+    suspend fun saveAggregation(value: AggregationSettings) = store.edit {
         it[aggregationKey] = json.encodeToString(value)
     }
 
     /** 设置 › 本地音乐：在 edit 里读旧值再改，扫描写“上次扫描时间”和用户改开关同时发生也不会互相覆盖。 */
-    suspend fun localMusic(transform: (LocalMusicSettings) -> LocalMusicSettings) = context.dataStore.edit {
+    suspend fun localMusic(transform: (LocalMusicSettings) -> LocalMusicSettings) = store.edit {
         val current = runCatching { json.decodeFromString<LocalMusicSettings>(it[localMusicKey] ?: "") }
             .getOrDefault(LocalMusicSettings())
         it[localMusicKey] = json.encodeToString(transform(current))
     }
 
-    suspend fun saveEqualizer(value: EqualizerSettings) = context.dataStore.edit {
+    suspend fun saveEqualizer(value: EqualizerSettings) = store.edit {
         it[equalizerEnabledKey] = value.enabled
         it[equalizerPresetKey] = value.presetId
         it[equalizerBandsKey] = json.encodeToString(value.customBands)
     }
 
-    suspend fun addSearchHistory(query: String) = context.dataStore.edit {
+    suspend fun addSearchHistory(query: String) = store.edit {
         val value = query.trim()
         if (value.isBlank()) return@edit
         val current = runCatching {
@@ -799,16 +782,16 @@ class SettingsStore(private val context: Context) {
         it[searchHistoryKey] = json.encodeToString(current.take(20))
     }
 
-    suspend fun removeSearchHistory(query: String) = context.dataStore.edit {
+    suspend fun removeSearchHistory(query: String) = store.edit {
         val current = runCatching {
             json.decodeFromString<List<String>>(it[searchHistoryKey] ?: "[]")
         }.getOrDefault(emptyList()).filterNot { item -> item == query }
         it[searchHistoryKey] = json.encodeToString(current)
     }
 
-    suspend fun clearSearchHistory() = context.dataStore.edit { it[searchHistoryKey] = "[]" }
+    suspend fun clearSearchHistory() = store.edit { it[searchHistoryKey] = "[]" }
 
-    suspend fun lastUpdateCheck(value: Long) = context.dataStore.edit { it[lastUpdateCheckKey] = value }
+    suspend fun lastUpdateCheck(value: Long) = store.edit { it[lastUpdateCheckKey] = value }
 }
 
 data class CookieSnapshot(
@@ -931,759 +914,3 @@ data class AppSettings(
     /** 更新检查与下载用哪条 GitHub 线路。 */
     val githubMirror: GithubMirror = GithubMirror.Auto,
 )
-
-// 同一首歌可以同时在“喜欢”和“最近播放”里，所以主键是 (key, bucket)
-@Entity(tableName = "saved_songs", primaryKeys = ["key", "bucket"])
-data class SavedSong(val key: String, val bucket: String, val payload: String, val updatedAt: Long)
-
-/** 取消收藏的墓碑，用来把删除同步到其他设备。 */
-@Entity(tableName = "saved_song_tombstones", primaryKeys = ["key", "bucket"])
-data class SavedSongTombstone(
-    val key: String,
-    val bucket: String,
-    @ColumnInfo(name = "deleted_at") val deletedAt: Long,
-)
-
-/** 下载记录状态。进行中的记录只活在当前进程里，进程重启后由 ViewModel 清理。 */
-const val DOWNLOAD_ACTIVE = "下载中"
-const val DOWNLOAD_FAILED = "下载失败"
-const val DOWNLOAD_DONE = "已完成"
-
-@Entity(tableName = "downloads")
-data class DownloadRecord(
-    @PrimaryKey val key: String,
-    val payload: String,
-    val path: String,
-    val state: String,
-    val updatedAt: Long,
-    /** 失败原因，只对 [DOWNLOAD_FAILED] 有意义。 */
-    val error: String = "",
-)
-
-/** 切歌过渡的离线分析结果：节拍网格、响度、调性、首尾和段落，按曲目 key 存。 */
-@Entity(tableName = "automix_analysis")
-data class AutomixAnalysisEntity(
-    @PrimaryKey @ColumnInfo(name = "song_key") val songKey: String,
-    @ColumnInfo(name = "updated_at") val updatedAt: Long,
-    @ColumnInfo(name = "duration_ms") val durationMs: Long,
-    val bpm: Double,
-    @ColumnInfo(name = "beat_period_s") val beatPeriodS: Double,
-    @ColumnInfo(name = "beat_t0_s") val beatT0S: Double,
-    @ColumnInfo(name = "beat_k0") val beatK0: Long,
-    @ColumnInfo(name = "beat_confidence") val beatConfidence: Float,
-    val downbeat: Int,
-    @ColumnInfo(name = "downbeat_clear") val downbeatClear: Boolean,
-    @ColumnInfo(name = "key_index") val keyIndex: Int,
-    @ColumnInfo(name = "key_minor") val keyMinor: Boolean,
-    @ColumnInfo(name = "key_confidence") val keyConfidence: Float,
-    @ColumnInfo(name = "loudness_db") val loudnessDb: Float,
-    @ColumnInfo(name = "intro_ms") val introMs: Long,
-    @ColumnInfo(name = "outro_ms") val outroMs: Long,
-    /** `起点毫秒:能量,起点毫秒:能量`，能量 0..1；空表示没分段。 */
-    val sections: String,
-)
-
-@Entity(tableName = "playlists")
-data class PlaylistEntity(
-    @PrimaryKey val id: String,
-    val name: String,
-    @ColumnInfo(name = "created_at") val createdAt: Long,
-    @ColumnInfo(name = "updated_at") val updatedAt: Long,
-    val dirty: Boolean = true,
-    @ColumnInfo(name = "deleted_at") val deletedAt: Long? = null,
-    /** 绑定的平台歌单：provider + 平台歌单 id。非空表示这个歌单跟随平台更新。 */
-    @ColumnInfo(name = "link_provider", defaultValue = "") val linkProvider: String = "",
-    @ColumnInfo(name = "link_id", defaultValue = "") val linkId: String = "",
-    /** 平台歌单封面；绑定时封面拼贴优先用它。 */
-    @ColumnInfo(name = "link_cover", defaultValue = "") val linkCover: String = "",
-    /** 上次成功从平台刷新的时间，用于节流。 */
-    @ColumnInfo(name = "link_synced_at", defaultValue = "0") val linkSyncedAt: Long = 0L,
-) {
-    val bound get() = linkProvider.isNotBlank() && linkId.isNotBlank()
-}
-
-@Entity(
-    tableName = "playlist_entries",
-    primaryKeys = ["playlist_id", "position"],
-    foreignKeys = [
-        ForeignKey(
-            entity = PlaylistEntity::class,
-            parentColumns = ["id"],
-            childColumns = ["playlist_id"],
-            onDelete = ForeignKey.CASCADE,
-        ),
-    ],
-    indices = [Index(value = ["playlist_id"], name = "idx_entries_playlist")],
-)
-data class PlaylistEntryEntity(
-    @ColumnInfo(name = "playlist_id") val playlistId: String,
-    val position: Int,
-    @ColumnInfo(name = "song_key") val songKey: String,
-    val payload: String,
-)
-
-@Entity(tableName = "sync_accounts")
-data class SyncAccountEntity(
-    @PrimaryKey val provider: String,
-    @ColumnInfo(name = "remote_id") val remoteId: String = "",
-    @ColumnInfo(name = "file_name") val fileName: String = "mymusic-library.json",
-    @ColumnInfo(name = "last_synced_at") val lastSyncedAt: Long = 0L,
-    @ColumnInfo(name = "remote_revision") val remoteRevision: String = "",
-    @ColumnInfo(name = "auto_sync") val autoSync: Boolean = true,
-    @ColumnInfo(name = "wifi_only") val wifiOnly: Boolean = false,
-    @ColumnInfo(name = "remote_url") val remoteUrl: String = "",
-    @ColumnInfo(name = "account_label") val accountLabel: String = "",
-    @ColumnInfo(name = "updated_at") val updatedAt: Long = 0L,
-)
-
-@Entity(tableName = "sync_base")
-data class SyncBaseEntity(
-    @PrimaryKey @ColumnInfo(name = "account_id") val accountId: String,
-    val snapshot: String,
-    @ColumnInfo(name = "remote_revision") val remoteRevision: String,
-    @ColumnInfo(name = "updated_at") val updatedAt: Long,
-)
-
-@Entity(tableName = "sync_conflicts")
-data class SyncConflictEntity(
-    @PrimaryKey @ColumnInfo(name = "playlist_id") val playlistId: String,
-    @ColumnInfo(name = "local_snapshot") val localSnapshot: String,
-    @ColumnInfo(name = "remote_snapshot") val remoteSnapshot: String,
-    @ColumnInfo(name = "base_snapshot") val baseSnapshot: String,
-    @ColumnInfo(name = "detected_at") val detectedAt: Long,
-)
-
-@Entity(tableName = "canonical_tracks")
-data class CanonicalTrackEntity(
-    @PrimaryKey val id: String,
-    val title: String,
-    val artists: String,
-    val album: String,
-    @ColumnInfo(name = "duration_sec") val durationSec: Int,
-    val version: String,
-    val cover: String,
-    val confidence: Float,
-    @ColumnInfo(name = "updated_at") val updatedAt: Long,
-)
-
-@Entity(
-    tableName = "canonical_sources",
-    foreignKeys = [
-        ForeignKey(
-            entity = CanonicalTrackEntity::class,
-            parentColumns = ["id"],
-            childColumns = ["canonical_id"],
-            onDelete = ForeignKey.CASCADE,
-        ),
-    ],
-    indices = [
-        Index(value = ["canonical_id"], name = "idx_sources_canonical"),
-        Index(value = ["provider_id"], name = "idx_sources_provider"),
-    ],
-)
-data class CanonicalSourceEntity(
-    @PrimaryKey
-    @ColumnInfo(name = "source_key")
-    val sourceKey: String,
-    @ColumnInfo(name = "canonical_id")
-    val canonicalId: String,
-    @ColumnInfo(name = "provider_id")
-    val providerId: String,
-    val payload: String,
-    @ColumnInfo(name = "match_score")
-    val matchScore: Float,
-    @ColumnInfo(name = "match_method")
-    val matchMethod: String,
-    val availability: String,
-    @ColumnInfo(name = "is_preview")
-    val isPreview: Boolean,
-    @ColumnInfo(name = "checked_at")
-    val checkedAt: Long,
-)
-
-@Entity(tableName = "match_cache", primaryKeys = ["source_key", "target_provider"])
-data class MatchCacheEntity(
-    @ColumnInfo(name = "source_key")
-    val sourceKey: String,
-    @ColumnInfo(name = "target_provider")
-    val targetProvider: String,
-    @ColumnInfo(name = "target_key")
-    val targetKey: String,
-    val score: Float,
-    val payload: String,
-    @ColumnInfo(name = "checked_at")
-    val checkedAt: Long,
-)
-
-@Entity(tableName = "track_overrides")
-data class TrackOverrideEntity(
-    @PrimaryKey
-    @ColumnInfo(name = "source_key")
-    val sourceKey: String,
-    @ColumnInfo(name = "canonical_id")
-    val canonicalId: String,
-    val action: String,
-    @ColumnInfo(name = "updated_at")
-    val updatedAt: Long,
-)
-
-@Dao
-interface MusicDao {
-    @Query("SELECT * FROM saved_songs WHERE bucket = :bucket ORDER BY updatedAt DESC")
-    fun songs(bucket: String): Flow<List<SavedSong>>
-    @Query("SELECT * FROM saved_songs WHERE bucket = :bucket ORDER BY updatedAt DESC")
-    suspend fun songsOnce(bucket: String): List<SavedSong>
-    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun save(song: SavedSong)
-    @Query("DELETE FROM saved_songs WHERE key = :key AND bucket = :bucket") suspend fun remove(bucket: String, key: String)
-    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveTombstone(tombstone: SavedSongTombstone)
-    @Query("DELETE FROM saved_song_tombstones WHERE key = :key AND bucket = :bucket")
-    suspend fun clearTombstone(bucket: String, key: String)
-    @Query("SELECT * FROM saved_song_tombstones WHERE bucket = :bucket")
-    suspend fun tombstones(bucket: String): List<SavedSongTombstone>
-    @Query("SELECT * FROM downloads ORDER BY updatedAt DESC") fun downloads(): Flow<List<DownloadRecord>>
-    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveDownload(record: DownloadRecord)
-    @Query("DELETE FROM downloads WHERE key = :key") suspend fun deleteDownload(key: String)
-    @Query("SELECT * FROM automix_analysis WHERE song_key = :key LIMIT 1")
-    suspend fun automixAnalysis(key: String): AutomixAnalysisEntity?
-    @Upsert suspend fun saveAutomixAnalysis(entry: AutomixAnalysisEntity)
-    @Query("DELETE FROM automix_analysis WHERE updated_at < :cutoff")
-    suspend fun pruneAutomixAnalysis(cutoff: Long)
-}
-
-@Dao
-interface LibraryDao {
-    @Query("SELECT * FROM playlists WHERE deleted_at IS NULL ORDER BY updated_at DESC")
-    fun playlists(): Flow<List<PlaylistEntity>>
-    @Query("SELECT * FROM playlists WHERE deleted_at IS NULL ORDER BY updated_at DESC")
-    suspend fun playlistsOnce(): List<PlaylistEntity>
-    @Query("SELECT * FROM playlists")
-    suspend fun allPlaylistsOnce(): List<PlaylistEntity>
-    @Query("SELECT * FROM playlists WHERE id = :id")
-    fun playlist(id: String): Flow<PlaylistEntity?>
-    @Query("SELECT * FROM playlists WHERE id = :id")
-    suspend fun playlistOnce(id: String): PlaylistEntity?
-    @Query("SELECT * FROM playlist_entries WHERE playlist_id = :id ORDER BY position")
-    fun entries(id: String): Flow<List<PlaylistEntryEntity>>
-    @Query("SELECT * FROM playlist_entries WHERE playlist_id = :id ORDER BY position")
-    suspend fun entriesOnce(id: String): List<PlaylistEntryEntity>
-    @Query("SELECT * FROM playlist_entries ORDER BY playlist_id, position")
-    suspend fun allEntriesOnce(): List<PlaylistEntryEntity>
-    @Query("SELECT playlist_id, COUNT(*) AS total FROM playlist_entries GROUP BY playlist_id")
-    fun entryCounts(): Flow<List<PlaylistEntryCount>>
-    @Query("SELECT COUNT(*) FROM playlist_entries")
-    suspend fun entryCount(): Int
-    /** 哪些（没删的）歌单里有这几个 key 之一：播放页「加到歌单」按钮和面板的勾选态。 */
-    @Query(
-        "SELECT DISTINCT e.playlist_id FROM playlist_entries e JOIN playlists p ON p.id = e.playlist_id " +
-            "WHERE p.deleted_at IS NULL AND e.song_key IN (:keys)"
-    )
-    fun playlistsWithSongs(keys: List<String>): Flow<List<String>>
-    // 必须 upsert 不能 INSERT OR REPLACE：REPLACE 先删旧行再插入，playlist_entries 的
-    // ON DELETE CASCADE 会把整份曲目连带删掉（刷新绑定歌单、解除绑定都会把歌曲清空）
-    @Upsert suspend fun putPlaylist(playlist: PlaylistEntity)
-    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putEntries(entries: List<PlaylistEntryEntity>)
-    @Query("DELETE FROM playlist_entries WHERE playlist_id = :id") suspend fun clearEntries(id: String)
-    @Query("UPDATE playlists SET name = :name, updated_at = :time, dirty = 1 WHERE id = :id")
-    suspend fun renamePlaylist(id: String, name: String, time: Long)
-    @Query("UPDATE playlists SET dirty = 1, updated_at = :time WHERE id = :id")
-    suspend fun markDirty(id: String, time: Long)
-    @Query("UPDATE playlists SET dirty = :dirty, updated_at = :time WHERE id = :id")
-    suspend fun markClean(id: String, time: Long, dirty: Boolean = false)
-    @Query("UPDATE playlists SET deleted_at = :time, updated_at = :time, dirty = 1 WHERE id = :id")
-    suspend fun softDelete(id: String, time: Long)
-    @Query("DELETE FROM playlists WHERE id = :id") suspend fun deletePlaylist(id: String)
-    @Query("DELETE FROM playlists WHERE deleted_at IS NOT NULL AND deleted_at < :cutoff")
-    suspend fun pruneDeleted(cutoff: Long)
-    @Query("DELETE FROM playlists")
-    suspend fun clearPlaylists()
-
-    @Transaction
-    suspend fun replaceEntries(id: String, entries: List<PlaylistEntryEntity>) {
-        clearEntries(id)
-        if (entries.isNotEmpty()) putEntries(entries)
-    }
-}
-
-data class PlaylistEntryCount(
-    @ColumnInfo(name = "playlist_id") val playlistId: String,
-    val total: Int,
-)
-
-@Dao
-interface SyncDao {
-    @Query("SELECT * FROM sync_accounts ORDER BY updated_at DESC")
-    fun accounts(): Flow<List<SyncAccountEntity>>
-    @Query("SELECT * FROM sync_accounts LIMIT 1")
-    suspend fun accountOnce(): SyncAccountEntity?
-    @Query("SELECT * FROM sync_accounts WHERE provider = :provider")
-    suspend fun account(provider: String): SyncAccountEntity?
-    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putAccount(account: SyncAccountEntity)
-    @Query("DELETE FROM sync_accounts") suspend fun clearAccounts()
-    @Query("SELECT * FROM sync_base WHERE account_id = :id")
-    suspend fun base(id: String): SyncBaseEntity?
-    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putBase(base: SyncBaseEntity)
-    @Query("DELETE FROM sync_base") suspend fun clearBases()
-    @Query("SELECT * FROM sync_conflicts ORDER BY detected_at DESC")
-    fun conflicts(): Flow<List<SyncConflictEntity>>
-    @Query("SELECT * FROM sync_conflicts ORDER BY detected_at DESC")
-    suspend fun conflictsOnce(): List<SyncConflictEntity>
-    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putConflict(conflict: SyncConflictEntity)
-    @Query("DELETE FROM sync_conflicts WHERE playlist_id = :id") suspend fun deleteConflict(id: String)
-    @Query("DELETE FROM sync_conflicts") suspend fun clearConflicts()
-}
-
-@Dao
-interface AggregateDao {
-    // 同 putPlaylist：REPLACE 会级联删掉这个曲目下的 canonical_sources
-    @Upsert suspend fun saveTrack(track: CanonicalTrackEntity)
-    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveSources(sources: List<CanonicalSourceEntity>)
-    @Query("SELECT * FROM canonical_sources WHERE canonical_id = :canonicalId ORDER BY provider_id")
-    suspend fun sources(canonicalId: String): List<CanonicalSourceEntity>
-    @Query("SELECT * FROM canonical_sources WHERE source_key = :sourceKey LIMIT 1")
-    suspend fun source(sourceKey: String): CanonicalSourceEntity?
-    @Query("SELECT * FROM match_cache WHERE source_key = :sourceKey AND target_provider = :targetProvider LIMIT 1")
-    suspend fun match(sourceKey: String, targetProvider: String): MatchCacheEntity?
-    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveMatch(entry: MatchCacheEntity)
-    @Query("DELETE FROM match_cache") suspend fun clearMatches()
-    @Query("DELETE FROM match_cache WHERE checked_at < :cutoff") suspend fun pruneMatches(cutoff: Long)
-    @Query("DELETE FROM canonical_tracks WHERE updated_at < :cutoff") suspend fun pruneTracks(cutoff: Long)
-    @Query("SELECT * FROM track_overrides") suspend fun overrides(): List<TrackOverrideEntity>
-    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveOverride(entry: TrackOverrideEntity)
-    @Query("DELETE FROM track_overrides") suspend fun clearOverrides()
-}
-
-@Database(
-    entities = [
-        SavedSong::class,
-        SavedSongTombstone::class,
-        DownloadRecord::class,
-        PlaylistEntity::class,
-        PlaylistEntryEntity::class,
-        SyncAccountEntity::class,
-        SyncBaseEntity::class,
-        SyncConflictEntity::class,
-        CanonicalTrackEntity::class,
-        CanonicalSourceEntity::class,
-        MatchCacheEntity::class,
-        TrackOverrideEntity::class,
-        AutomixAnalysisEntity::class,
-        LocalTrackEntity::class,
-        LocalRefEntity::class,
-        LocalRemoteEntity::class,
-        LocalUploadEntity::class,
-        SubsonicTrackEntity::class,
-    ],
-    version = 13,
-    exportSchema = false,
-)
-abstract class AppDatabase : RoomDatabase() {
-    abstract fun dao(): MusicDao
-    abstract fun library(): LibraryDao
-    abstract fun sync(): SyncDao
-    abstract fun aggregate(): AggregateDao
-    abstract fun localTracks(): LocalTrackDao
-    abstract fun localRefs(): LocalRefDao
-    abstract fun localUploads(): LocalUploadDao
-    abstract fun subsonicTracks(): SubsonicTrackDao
-
-    companion object {
-        private val MIGRATION_1_2 = object : Migration(1, 2) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL(
-                    """
-                    CREATE TABLE IF NOT EXISTS `canonical_tracks` (
-                        `id` TEXT NOT NULL,
-                        `title` TEXT NOT NULL,
-                        `artists` TEXT NOT NULL,
-                        `album` TEXT NOT NULL,
-                        `duration_sec` INTEGER NOT NULL,
-                        `version` TEXT NOT NULL,
-                        `cover` TEXT NOT NULL,
-                        `confidence` REAL NOT NULL,
-                        `updated_at` INTEGER NOT NULL,
-                        PRIMARY KEY(`id`)
-                    )
-                    """.trimIndent()
-                )
-                db.execSQL(
-                    """
-                    CREATE TABLE IF NOT EXISTS `canonical_sources` (
-                        `source_key` TEXT NOT NULL,
-                        `canonical_id` TEXT NOT NULL,
-                        `provider_id` TEXT NOT NULL,
-                        `payload` TEXT NOT NULL,
-                        `match_score` REAL NOT NULL,
-                        `match_method` TEXT NOT NULL,
-                        `availability` TEXT NOT NULL,
-                        `is_preview` INTEGER NOT NULL,
-                        `checked_at` INTEGER NOT NULL,
-                        PRIMARY KEY(`source_key`),
-                        FOREIGN KEY(`canonical_id`) REFERENCES `canonical_tracks`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
-                    )
-                    """.trimIndent()
-                )
-                db.execSQL("CREATE INDEX IF NOT EXISTS `idx_sources_canonical` ON `canonical_sources` (`canonical_id`)")
-                db.execSQL("CREATE INDEX IF NOT EXISTS `idx_sources_provider` ON `canonical_sources` (`provider_id`)")
-                db.execSQL(
-                    """
-                    CREATE TABLE IF NOT EXISTS `match_cache` (
-                        `source_key` TEXT NOT NULL,
-                        `target_provider` TEXT NOT NULL,
-                        `target_key` TEXT NOT NULL,
-                        `score` REAL NOT NULL,
-                        `payload` TEXT NOT NULL,
-                        `checked_at` INTEGER NOT NULL,
-                        PRIMARY KEY(`source_key`, `target_provider`)
-                    )
-                    """.trimIndent()
-                )
-            }
-        }
-
-        private val MIGRATION_2_3 = object : Migration(2, 3) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL(
-                    """
-                    CREATE TABLE IF NOT EXISTS `track_overrides` (
-                        `source_key` TEXT NOT NULL,
-                        `canonical_id` TEXT NOT NULL,
-                        `action` TEXT NOT NULL,
-                        `updated_at` INTEGER NOT NULL,
-                        PRIMARY KEY(`source_key`)
-                    )
-                    """.trimIndent()
-                )
-            }
-        }
-
-        private val MIGRATION_3_4 = object : Migration(3, 4) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL(
-                    """
-                    CREATE TABLE IF NOT EXISTS `playlists` (
-                        `id` TEXT NOT NULL,
-                        `name` TEXT NOT NULL,
-                        `created_at` INTEGER NOT NULL,
-                        `updated_at` INTEGER NOT NULL,
-                        `dirty` INTEGER NOT NULL,
-                        `deleted_at` INTEGER,
-                        PRIMARY KEY(`id`)
-                    )
-                    """.trimIndent()
-                )
-                db.execSQL(
-                    """
-                    CREATE TABLE IF NOT EXISTS `playlist_entries` (
-                        `playlist_id` TEXT NOT NULL,
-                        `position` INTEGER NOT NULL,
-                        `song_key` TEXT NOT NULL,
-                        `payload` TEXT NOT NULL,
-                        PRIMARY KEY(`playlist_id`, `position`),
-                        FOREIGN KEY(`playlist_id`) REFERENCES `playlists`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
-                    )
-                    """.trimIndent()
-                )
-                db.execSQL("CREATE INDEX IF NOT EXISTS `idx_entries_playlist` ON `playlist_entries` (`playlist_id`)")
-                db.execSQL(
-                    """
-                    CREATE TABLE IF NOT EXISTS `sync_accounts` (
-                        `provider` TEXT NOT NULL,
-                        `remote_id` TEXT NOT NULL,
-                        `file_name` TEXT NOT NULL,
-                        `last_synced_at` INTEGER NOT NULL,
-                        `remote_revision` TEXT NOT NULL,
-                        `auto_sync` INTEGER NOT NULL,
-                        `wifi_only` INTEGER NOT NULL,
-                        `remote_url` TEXT NOT NULL,
-                        `account_label` TEXT NOT NULL,
-                        `updated_at` INTEGER NOT NULL,
-                        PRIMARY KEY(`provider`)
-                    )
-                    """.trimIndent()
-                )
-                db.execSQL(
-                    """
-                    CREATE TABLE IF NOT EXISTS `sync_base` (
-                        `account_id` TEXT NOT NULL,
-                        `snapshot` TEXT NOT NULL,
-                        `remote_revision` TEXT NOT NULL,
-                        `updated_at` INTEGER NOT NULL,
-                        PRIMARY KEY(`account_id`)
-                    )
-                    """.trimIndent()
-                )
-                db.execSQL(
-                    """
-                    CREATE TABLE IF NOT EXISTS `sync_conflicts` (
-                        `playlist_id` TEXT NOT NULL,
-                        `local_snapshot` TEXT NOT NULL,
-                        `remote_snapshot` TEXT NOT NULL,
-                        `base_snapshot` TEXT NOT NULL,
-                        `detected_at` INTEGER NOT NULL,
-                        PRIMARY KEY(`playlist_id`)
-                    )
-                    """.trimIndent()
-                )
-
-                val json = Json { ignoreUnknownKeys = true }
-                val now = System.currentTimeMillis()
-                val cursor = db.query("SELECT id, name, songs FROM local_playlists ORDER BY id")
-                cursor.use {
-                    while (it.moveToNext()) {
-                        val name = it.getString(1).ifBlank { "未命名歌单" }
-                        val songs = runCatching {
-                            json.decodeFromString<List<Song>>(it.getString(2) ?: "[]")
-                        }.getOrDefault(emptyList())
-                        val id = UUID.randomUUID().toString()
-                        db.execSQL(
-                            "INSERT INTO playlists (id, name, created_at, updated_at, dirty, deleted_at) VALUES (?, ?, ?, ?, 1, NULL)",
-                            arrayOf<Any?>(id, name, now, now),
-                        )
-                        songs.forEachIndexed { index, song ->
-                            db.execSQL(
-                                "INSERT INTO playlist_entries (playlist_id, position, song_key, payload) VALUES (?, ?, ?, ?)",
-                                arrayOf<Any?>(id, index, song.key, json.encodeToString(song)),
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        /** saved_songs 原来只用 key 做主键，写最近播放会把同一首歌的“喜欢”记录替换掉。 */
-        private val MIGRATION_4_5 = object : Migration(4, 5) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL(
-                    """
-                    CREATE TABLE IF NOT EXISTS `saved_songs_new` (
-                        `key` TEXT NOT NULL,
-                        `bucket` TEXT NOT NULL,
-                        `payload` TEXT NOT NULL,
-                        `updatedAt` INTEGER NOT NULL,
-                        PRIMARY KEY(`key`, `bucket`)
-                    )
-                    """.trimIndent()
-                )
-                db.execSQL("INSERT OR REPLACE INTO `saved_songs_new` (`key`, `bucket`, `payload`, `updatedAt`) SELECT `key`, `bucket`, `payload`, `updatedAt` FROM `saved_songs`")
-                db.execSQL("DROP TABLE `saved_songs`")
-                db.execSQL("ALTER TABLE `saved_songs_new` RENAME TO `saved_songs`")
-            }
-        }
-
-        /** 收藏同步需要墓碑表来传播取消收藏。 */
-        private val MIGRATION_5_6 = object : Migration(5, 6) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL(
-                    """
-                    CREATE TABLE IF NOT EXISTS `saved_song_tombstones` (
-                        `key` TEXT NOT NULL,
-                        `bucket` TEXT NOT NULL,
-                        `deleted_at` INTEGER NOT NULL,
-                        PRIMARY KEY(`key`, `bucket`)
-                    )
-                    """.trimIndent()
-                )
-            }
-        }
-
-        /** 平台歌单绑定：link_* 四列记录绑定的平台歌单和刷新时间。 */
-        private val MIGRATION_6_7 = object : Migration(6, 7) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE `playlists` ADD COLUMN `link_provider` TEXT NOT NULL DEFAULT ''")
-                db.execSQL("ALTER TABLE `playlists` ADD COLUMN `link_id` TEXT NOT NULL DEFAULT ''")
-                db.execSQL("ALTER TABLE `playlists` ADD COLUMN `link_cover` TEXT NOT NULL DEFAULT ''")
-                db.execSQL("ALTER TABLE `playlists` ADD COLUMN `link_synced_at` INTEGER NOT NULL DEFAULT 0")
-            }
-        }
-
-        private val MIGRATION_7_8 = object : Migration(7, 8) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL(
-                    """
-                    CREATE TABLE IF NOT EXISTS `automix_analysis` (
-                        `song_key` TEXT NOT NULL,
-                        `updated_at` INTEGER NOT NULL,
-                        `duration_ms` INTEGER NOT NULL,
-                        `bpm` REAL NOT NULL,
-                        `beat_period_s` REAL NOT NULL,
-                        `beat_t0_s` REAL NOT NULL,
-                        `beat_k0` INTEGER NOT NULL,
-                        `beat_confidence` REAL NOT NULL,
-                        `downbeat` INTEGER NOT NULL,
-                        `downbeat_clear` INTEGER NOT NULL,
-                        `key_index` INTEGER NOT NULL,
-                        `key_minor` INTEGER NOT NULL,
-                        `key_confidence` REAL NOT NULL,
-                        `loudness_db` REAL NOT NULL,
-                        `intro_ms` INTEGER NOT NULL,
-                        `outro_ms` INTEGER NOT NULL,
-                        `sections` TEXT NOT NULL,
-                        PRIMARY KEY(`song_key`)
-                    )
-                    """.trimIndent()
-                )
-            }
-        }
-
-        /** 下载失败要把原因留在记录里，下载页才能提示为什么失败。 */
-        private val MIGRATION_8_9 = object : Migration(8, 9) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `error` TEXT NOT NULL DEFAULT ''")
-            }
-        }
-
-        /**
-         * 本地音乐表。列全是 NOT NULL、不带 SQL 默认值：Room 打开库时按实体校验表结构，
-         * 实体没写默认值这里也不能写，否则校验对不上。云端（remote_*）几列先建好，上传落地时不必再迁移。
-         */
-        internal val MIGRATION_9_10 = object : Migration(9, 10) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL(
-                    """
-                    CREATE TABLE IF NOT EXISTS `local_tracks` (
-                        `local_id` TEXT NOT NULL,
-                        `uri` TEXT NOT NULL,
-                        `origin` TEXT NOT NULL,
-                        `display_name` TEXT NOT NULL,
-                        `relative_path` TEXT NOT NULL,
-                        `data_path` TEXT NOT NULL,
-                        `title` TEXT NOT NULL,
-                        `artist` TEXT NOT NULL,
-                        `album` TEXT NOT NULL,
-                        `duration_sec` INTEGER NOT NULL,
-                        `size` INTEGER NOT NULL,
-                        `mime_type` TEXT NOT NULL,
-                        `modified_at` INTEGER NOT NULL,
-                        `added_at` INTEGER NOT NULL,
-                        `bitrate` INTEGER NOT NULL,
-                        `sample_rate` INTEGER NOT NULL,
-                        `bits_per_sample` INTEGER NOT NULL,
-                        `tags_read` INTEGER NOT NULL,
-                        `cover_path` TEXT NOT NULL,
-                        `lrc_uri` TEXT NOT NULL,
-                        `missing` INTEGER NOT NULL,
-                        `match_provider` TEXT NOT NULL,
-                        `match_id` TEXT NOT NULL,
-                        `match_confidence` REAL NOT NULL,
-                        `match_method` TEXT NOT NULL,
-                        `matched_at` INTEGER NOT NULL,
-                        `match_payload` TEXT NOT NULL,
-                        `remote_provider` TEXT NOT NULL,
-                        `remote_id` TEXT NOT NULL,
-                        `remote_playable_id` TEXT NOT NULL,
-                        `remote_status` TEXT NOT NULL,
-                        `remote_updated_at` INTEGER NOT NULL,
-                        `updated_at` INTEGER NOT NULL,
-                        PRIMARY KEY(`local_id`)
-                    )
-                    """.trimIndent()
-                )
-                db.execSQL("CREATE INDEX IF NOT EXISTS `idx_local_tracks_uri` ON `local_tracks` (`uri`)")
-            }
-        }
-
-        /**
-         * 本地歌的跨设备线索（同步 v3）：local_refs 记文件名、大小、文件所在设备、匹配；
-         * local_remotes 记云端副本，一首歌在几个云端各一行。只建新表，不碰已有数据。
-         */
-        internal val MIGRATION_10_11 = object : Migration(10, 11) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL(
-                    """
-                    CREATE TABLE IF NOT EXISTS `local_refs` (
-                        `local_id` TEXT NOT NULL,
-                        `file_name` TEXT NOT NULL,
-                        `file_size` INTEGER NOT NULL,
-                        `device` TEXT NOT NULL,
-                        `match_provider` TEXT NOT NULL,
-                        `match_id` TEXT NOT NULL,
-                        `match_confidence` REAL NOT NULL,
-                        `match_method` TEXT NOT NULL,
-                        `matched_at` INTEGER NOT NULL,
-                        `match_payload` TEXT NOT NULL,
-                        `updated_at` INTEGER NOT NULL,
-                        PRIMARY KEY(`local_id`)
-                    )
-                    """.trimIndent()
-                )
-                db.execSQL(
-                    """
-                    CREATE TABLE IF NOT EXISTS `local_remotes` (
-                        `local_id` TEXT NOT NULL,
-                        `provider` TEXT NOT NULL,
-                        `remote_id` TEXT NOT NULL,
-                        `playable_id` TEXT NOT NULL,
-                        `file_name` TEXT NOT NULL,
-                        `file_size` INTEGER NOT NULL,
-                        `status` TEXT NOT NULL,
-                        `uploaded_at` TEXT NOT NULL,
-                        `ext` TEXT NOT NULL,
-                        `md5` TEXT NOT NULL,
-                        `cloud_song_id` TEXT NOT NULL,
-                        `check_state` TEXT NOT NULL,
-                        `checked_at` INTEGER NOT NULL,
-                        `updated_at` INTEGER NOT NULL,
-                        PRIMARY KEY(`local_id`, `provider`)
-                    )
-                    """.trimIndent()
-                )
-            }
-        }
-
-        /**
-         * 本地歌的上传队列（cloud_uploads）：进程被杀、重启后按它把还没传完的放回来。
-         * 只记身份、位置、状态和失败原因，不放音频；只建新表。
-         */
-        internal val MIGRATION_11_12 = object : Migration(11, 12) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL(
-                    """
-                    CREATE TABLE IF NOT EXISTS `cloud_uploads` (
-                        `local_id` TEXT NOT NULL,
-                        `provider` TEXT NOT NULL,
-                        `position` INTEGER NOT NULL,
-                        `state` TEXT NOT NULL,
-                        `error_kind` TEXT NOT NULL,
-                        `error_message` TEXT NOT NULL,
-                        `error_code` INTEGER NOT NULL,
-                        `attempts` INTEGER NOT NULL,
-                        PRIMARY KEY(`local_id`, `provider`)
-                    )
-                    """.trimIndent()
-                )
-            }
-        }
-
-        internal val MIGRATION_12_13 = object : Migration(12, 13) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL(
-                    """
-                    CREATE TABLE IF NOT EXISTS `subsonic_tracks` (
-                        `account_id` TEXT NOT NULL,
-                        `song_id` TEXT NOT NULL,
-                        `title` TEXT NOT NULL,
-                        `artist` TEXT NOT NULL,
-                        `album` TEXT NOT NULL,
-                        `album_id` TEXT NOT NULL,
-                        `duration` INTEGER NOT NULL,
-                        `size` INTEGER NOT NULL,
-                        `bitrate` INTEGER NOT NULL,
-                        `suffix` TEXT NOT NULL,
-                        `cover_art` TEXT NOT NULL,
-                        `extra_json` TEXT NOT NULL,
-                        `updated_at` INTEGER NOT NULL,
-                        PRIMARY KEY(`account_id`, `song_id`)
-                    )
-                    """.trimIndent()
-                )
-            }
-        }
-
-        internal val ALL_MIGRATIONS: Array<Migration>
-            get() = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
-
-        fun create(context: Context) = Room.databaseBuilder(context, AppDatabase::class.java, "mymusic.db")
-            .addMigrations(*ALL_MIGRATIONS)
-            .build()
-    }
-}

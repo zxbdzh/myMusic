@@ -8,6 +8,8 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.serialization)
+    // Room 的 KSP 处理器在 JVM 目标上生成 AppDatabase_Impl（schema 与迁移都在这边）
+    alias(libs.plugins.ksp)
 }
 
 java {
@@ -31,8 +33,14 @@ dependencies {
     api(libs.okhttp)
     // 局域网歌单面板 / 同步配网面板 / 电视输入面板各自起一个 NanoHTTPD 服务
     implementation(libs.nanohttpd)
-    // 注：Room 还没有进 :core —— 实体与 DAO 仍留在 :app 的 AppStore，
-    // 搬迁步骤与依赖写法见 docs/pc/ROOM-SPIKE.md §5（room-runtime + sqlite-bundled，**不要** room-ktx）。
+    // Room：schema / 实体 / DAO / 迁移都在 :core，Android 与桌面共用一份声明。
+    // 注意：**不要**引 room-ktx —— 那是 Android-only 的 AAR，纯 JVM 消费者解析不到变体（ROOM-SPIKE 坑①）。
+    api(libs.androidx.room.runtime)
+    // 纯 JVM 侧的 SQLite 驱动：桌面用自带 SQLite，不依赖系统库
+    implementation(libs.androidx.sqlite.bundled)
+    ksp(libs.androidx.room.compiler)
+    // 设置项：Preferences / edit / 各类 Key 都是 :core 可用的（Android 的 preferencesDataStore 委托留在 :app）
+    api(libs.androidx.datastore.preferences.core)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
@@ -40,4 +48,9 @@ dependencies {
     testImplementation(libs.okhttp.mockwebserver)
     // 证书钉住的测试在测试里现生成自签名证书和根证书
     testImplementation(libs.okhttp.tls)
+}
+
+// 从这一版起导出 schema：后续 AutoMigration / 迁移校验才有依据（app 侧原本是 exportSchema=false）
+ksp {
+    arg("room.schemaLocation", layout.projectDirectory.dir("schemas").asFile.absolutePath)
 }

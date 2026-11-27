@@ -31,3 +31,7 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# C# SMTC bridge 的编译产物（源码 3 个文件在 desktop/native/smtc-bridge 根目录）
+desktop/native/smtc-bridge/bin/
+desktop/native/smtc-bridge/obj/

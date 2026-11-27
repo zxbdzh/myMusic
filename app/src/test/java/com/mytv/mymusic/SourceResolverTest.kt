@@ -377,6 +377,14 @@ class SourceResolverTest {
     }
 
     @Test
+    fun restoredAppleCardStreamDisplaysKilobitsPerSecond() {
+        val stored = song("a1", "apple", bitrate = 256_000, ext = "m3u8")
+        val source = TrackMatcher.singleSource(stored, "Apple Music").sources.single()
+
+        assertEquals("256 kbps · M3U8", source.qualityLabel)
+    }
+
+    @Test
     fun appleCardFailureAtStartupKeepsTheDirectMethodAvailable() = runBlocking {
         val credentials = mutableListOf<String>()
         val apple = song("a1", "apple")

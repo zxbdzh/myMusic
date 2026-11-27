@@ -85,10 +85,14 @@ data class TrackSource(
     val playbackMethod: PlaybackMethod = PlaybackMethod.Direct,
 ) {
     val playbackKey: String get() = resolutionKey.ifBlank { song.key }
-    val qualityLabel: String get() = listOfNotNull(
-        song.bitrate.takeIf { it > 0 }?.let { "$it kbps" },
-        song.ext.takeIf { it.isNotBlank() }?.uppercase(Locale.ROOT),
-    ).joinToString(" · ").ifBlank { "音质未知" }
+    val qualityLabel: String get() {
+        // 旧聆澜队列把 256 kbps 按 bps 存盘，恢复后也应显示正确的单位。
+        val bitrate = if (song.bitrate == 256_000 && providerId.catalogProviderId() == "apple") 256 else song.bitrate
+        return listOfNotNull(
+            bitrate.takeIf { it > 0 }?.let { "$it kbps" },
+            song.ext.takeIf { it.isNotBlank() }?.uppercase(Locale.ROOT),
+        ).joinToString(" · ").ifBlank { "音质未知" }
+    }
     val actualProviderName: String get() {
         val name = when (playbackMethod) {
             PlaybackMethod.Direct -> providerName

@@ -32,7 +32,7 @@ class AppleCardProvider {
         return PlayableStream(
             url = server.startAndUrl(),
             ext = "m3u8",
-            bitrate = 256_000,
+            bitrate = 256,
             level = "256k",
         )
     }

@@ -4787,8 +4787,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             return false
         }
         // 首曲可能解析成另一来源，起播后不能再把请求中的原曲加入一次。
-        val picks = playNextPicks(if (started) requested.drop(1) else requested, state.queue, state.canonicalQueue)
+        val requestedPicks = playNextPicks(if (started) requested.drop(1) else requested, state.queue, state.canonicalQueue)
             .filterNot { it.queueIndex == current }
+        val (picks, skipped) = capPlayNext(requestedPicks)
         if (picks.isEmpty() && !started) {
             message("这首是当前歌曲")
             return false
@@ -4820,7 +4821,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             picks.size == 1 -> "已安排「${picks.single().track.title}」下一首播放"
             else -> "已安排 ${picks.size} 首接着播放"
         }
-        message(if (player.repeatMode == Player.REPEAT_MODE_ONE && picks.isNotEmpty()) "$text · 单曲循环中，按「下一首」切换" else text)
+        val capped = if (skipped > 0) " · 一次最多 $PLAY_NEXT_LIMIT 首，其余未加入" else ""
+        message((if (player.repeatMode == Player.REPEAT_MODE_ONE && picks.isNotEmpty()) "$text · 单曲循环中，按「下一首」切换" else text) + capped)
         return true
     }
 

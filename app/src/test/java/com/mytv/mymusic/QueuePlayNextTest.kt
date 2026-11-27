@@ -5,6 +5,8 @@ import com.mytv.mymusic.aggregate.TrackMatcher
 import com.mytv.mymusic.data.Song
 import com.mytv.mymusic.playback.QueueShuffleOrder
 import com.mytv.mymusic.ui.PlayNextEdit
+import com.mytv.mymusic.ui.PLAY_NEXT_LIMIT
+import com.mytv.mymusic.ui.capPlayNext
 import com.mytv.mymusic.ui.playNextEdits
 import com.mytv.mymusic.ui.playNextPicks
 import org.junit.Assert.assertEquals
@@ -63,6 +65,17 @@ class QueuePlayNextTest {
         val selected = (1..200).map { track("B-$it") }
         val picks = playNextPicks(selected, listOf(anchor.sources.single().song), listOf(anchor))
         assertEquals(listOf(PlayNextEdit.Insert(1, selected)), playNextEdits(picks, 1, 0, shuffle = false))
+    }
+
+    @Test
+    fun `select all is capped so a huge album is not moved song by song`() {
+        val anchor = track("A")
+        val selected = (1..565).map { track("B-$it") }
+        val picks = playNextPicks(selected, listOf(anchor.sources.single().song), listOf(anchor))
+        val (capped, skipped) = capPlayNext(picks)
+        assertEquals(PLAY_NEXT_LIMIT, capped.size)
+        assertEquals(565 - PLAY_NEXT_LIMIT, skipped)
+        assertEquals(listOf(PlayNextEdit.Insert(1, selected.take(PLAY_NEXT_LIMIT))), playNextEdits(capped, 1, 0, shuffle = false))
     }
 
     private class QueueFixture(labels: List<String>, private val current: String, shuffled: List<String>? = null) {

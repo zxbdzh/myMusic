@@ -36,6 +36,17 @@ internal sealed interface PlayNextEdit {
     data class Insert(val at: Int, val tracks: List<CanonicalTrack>) : PlayNextEdit
 }
 
+/**
+ * 一次「下一首播放」最多安排的首数。排在当前歌后面的歌再多也听不完，
+ * 而已在队列里的歌要逐首挪动，全选上千首时会连续发上千次播放器指令卡住主线程。
+ */
+internal const val PLAY_NEXT_LIMIT = 200
+
+/** 按上限截断，同时返回被丢掉的数量，供提示用户「其余未加入」。 */
+internal fun capPlayNext(picks: List<PlayNextPick>): Pair<List<PlayNextPick>, Int> =
+    if (picks.size <= PLAY_NEXT_LIMIT) picks to 0
+    else picks.take(PLAY_NEXT_LIMIT) to picks.size - PLAY_NEXT_LIMIT
+
 internal fun playNextEdits(
     picks: List<PlayNextPick>,
     size: Int,

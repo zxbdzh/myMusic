@@ -2,8 +2,8 @@ package com.mytv.mymusic.ui.components
 
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -103,12 +103,14 @@ fun Modifier.selectionBackPreview(selection: SelectionState): Modifier = graphic
 }
 
 /** 批量操作条：替换列表头部的常规操作行。 */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SelectionBar(
     count: Int,
     allSelected: Boolean,
     onToggleAll: () -> Unit,
     onPlay: () -> Unit,
+    onPlayNext: () -> Unit,
     onAddTo: () -> Unit,
     onExit: () -> Unit,
     modifier: Modifier = Modifier,
@@ -122,12 +124,13 @@ fun SelectionBar(
         color = MaterialTheme.colorScheme.secondaryContainer,
         contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
     ) {
-        Row(
+        FlowRow(
             Modifier
                 .fillMaxWidth()
                 .heightIn(min = 56.dp)
                 .padding(start = 12.dp, end = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            itemVerticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 "已选 $count",
@@ -135,9 +138,18 @@ fun SelectionBar(
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
             )
-            Spacer(Modifier.weight(1f))
             TextButton(onToggleAll, modifier = Modifier.tvFocusRing(RoundedCornerShape(20.dp))) {
                 Text(if (allSelected) "清除" else "全选")
+            }
+            TextButton(onPlay, enabled = count > 0, modifier = Modifier.tvFocusRing(RoundedCornerShape(20.dp))) {
+                Text("播放")
+            }
+            TextButton(
+                onClick = { onPlayNext(); onExit() },
+                enabled = count > 0,
+                modifier = Modifier.tvFocusRing(RoundedCornerShape(20.dp)),
+            ) {
+                Text("下一首播放")
             }
             onRemove?.let {
                 TextButton(
@@ -147,9 +159,6 @@ fun SelectionBar(
                 ) {
                     Text("移除", color = MaterialTheme.colorScheme.error)
                 }
-            }
-            TextButton(onPlay, enabled = count > 0, modifier = Modifier.tvFocusRing(RoundedCornerShape(20.dp))) {
-                Text("播放")
             }
             onUpload?.let {
                 TextButton(it, enabled = count > 0, modifier = Modifier.tvFocusRing(RoundedCornerShape(20.dp))) {

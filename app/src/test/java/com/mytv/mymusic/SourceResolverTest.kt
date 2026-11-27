@@ -2,12 +2,16 @@ package com.mytv.mymusic
 
 import com.mytv.mymusic.aggregate.AggregationSettings
 import com.mytv.mymusic.aggregate.Availability
+import com.mytv.mymusic.aggregate.PlatformPlaybackPreference
+import com.mytv.mymusic.aggregate.PlaybackMethod
+import com.mytv.mymusic.aggregate.PlaybackMode
 import com.mytv.mymusic.aggregate.Resolution
 import com.mytv.mymusic.aggregate.SourcePolicy
 import com.mytv.mymusic.aggregate.SourceResolver
 import com.mytv.mymusic.aggregate.TrackMatcher
 import com.mytv.mymusic.aggregate.TrackSource
 import com.mytv.mymusic.aggregate.availabilityOf
+import com.mytv.mymusic.data.APPLE_CARD_KEY
 import com.mytv.mymusic.data.MusicRepository
 import com.mytv.mymusic.data.Song
 import com.mytv.mymusic.data.native.AudioQuality
@@ -370,6 +374,86 @@ class SourceResolverTest {
         val ready = second as Resolution.Ready
         assertEquals("netease", ready.source.providerId)
         assertFalse(ready.isPreview)
+    }
+
+    @Test
+    fun appleCardFailureAtStartupKeepsTheDirectMethodAvailable() = runBlocking {
+        val credentials = mutableListOf<String>()
+        val apple = song("a1", "apple")
+        val target = TrackMatcher.singleSource(apple, "Apple Music").copy(playbackPlatform = "apple")
+        val resolver = SourceResolver(
+            repository = object : MusicRepository() {
+                override suspend fun playableAppleCardStream(
+                    song: Song, card: String, workDir: File, quality: AudioQuality,
+                ): PlayableStream {
+                    assertEquals(apple.key, song.key)
+                    credentials += card
+                    return PlayableStream(url = "http://127.0.0.1:1234/index.m3u8")
+                }
+
+                override suspend fun playableStream(
+                    song: Song, cookie: String, workDir: File, quality: AudioQuality,
+                ): PlayableStream {
+                    credentials += cookie
+                    return PlayableStream(url = "https://example.com/apple-full.m3u8")
+                }
+            },
+            cookies = { mapOf("apple" to "test-apple-account") },
+            appleCard = { "test-card" },
+            settings = {
+                AggregationSettings(
+                    platformPlayback = mapOf("apple" to PlatformPlaybackPreference(PlaybackMode.Priority, PlaybackMethod.AppleCard)),
+                )
+            },
+            workDir = { File(".") },
+        )
+
+        val first = resolver.resolve(target) as Resolution.Ready
+        val fallback = resolver.resolve(target, excludeMethods = setOf(first.source.playbackKey)) as Resolution.Ready
+
+        assertEquals(PlaybackMethod.AppleCard, first.source.playbackMethod)
+        assertEquals(PlaybackMethod.Direct, fallback.source.playbackMethod)
+        assertEquals("apple:a1", fallback.source.song.key)
+        assertEquals(listOf("test-card", "test-apple-account"), credentials)
+    }
+
+    @Test
+    fun oldAppleCardSongRejectsFixedPreviewButCanPlayManuallyOnce() = runBlocking {
+        val oldSong = song("a1", APPLE_CARD_KEY)
+        val target = TrackMatcher.singleSource(oldSong, "Apple Music")
+        val resolver = SourceResolver(
+            repository = object : MusicRepository() {
+                override suspend fun playableAppleCardStream(
+                    song: Song, card: String, workDir: File, quality: AudioQuality,
+                ) = PlayableStream(url = "https://example.com/card-trial.m4a", preview = true)
+
+                override suspend fun playableStream(
+                    song: Song, cookie: String, workDir: File, quality: AudioQuality,
+                ) = PlayableStream(url = "https://example.com/apple-full.m3u8")
+            },
+            cookies = { emptyMap() },
+            appleCard = { "test-card" },
+            settings = {
+                AggregationSettings(
+                    platformPlayback = mapOf("apple" to PlatformPlaybackPreference(PlaybackMode.Pinned, PlaybackMethod.AppleCard)),
+                    allowPreview = true,
+                )
+            },
+            workDir = { File(".") },
+        )
+
+        val failure = resolver.resolve(target) as Resolution.None
+        assertEquals("apple:a1", failure.fixedSource?.song?.key)
+        assertEquals("仅提供试听", failure.attempts.single().reason)
+
+        val manual = resolver.resolve(
+            target,
+            pinnedProvider = "apple",
+            policy = resolver.buildPolicy(target, "apple", PlaybackMethod.Direct),
+        ) as Resolution.Ready
+        assertEquals(PlaybackMethod.Direct, manual.source.playbackMethod)
+        val next = TrackMatcher.singleSource(song("a2", "apple"), "Apple Music").copy(playbackPlatform = "apple")
+        assertEquals(PlaybackMethod.AppleCard, (resolver.resolve(next) as Resolution.None).fixedSource?.playbackMethod)
     }
 
     // ---------- buildPolicy：自动播放只走已启用的音乐源 ----------

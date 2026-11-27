@@ -4,6 +4,10 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 
+const val APPLE_CARD_KEY = "apple-card"
+
+fun String.catalogProviderId(): String = if (this == APPLE_CARD_KEY) "apple" else this
+
 @Serializable
 data class ProviderInfo(
     @SerialName("ID") val id: String = "",

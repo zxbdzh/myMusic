@@ -56,6 +56,7 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
@@ -664,7 +665,7 @@ internal fun PlaybackSettingsScreen(
                 }
                 SettingsNote(
                     "锁了档位就只取那一档；平台给不了（没上架、账号没有会员）时先换平台，仍不行才退回自动档。" +
-                        "各平台能选哪些档取决于当前账号，Spotify 与 Apple Music 只有试听片段。",
+                        "各平台能选哪些档取决于当前账号和使用的播放方式。",
                 )
             }
         }
@@ -695,6 +696,16 @@ internal fun PlaybackSettingsScreen(
                         "优先使用指定平台；它没有返回地址时仍会回退，并提示实际播放源。"
                     }
                 },
+            )
+        }
+        item(key = "platformPlayback", contentType = "settingRow") {
+            ListRow(
+                title = "各平台播放方式",
+                summary = "设置平台直连、洛雪或聆澜卡密的优先与固定方式",
+                index = 0,
+                count = 1,
+                onClick = { onOpen(SettingsSection.PlatformPlayback) },
+                icon = Icons.Filled.SwapHoriz,
             )
         }
         if (aggregation.playbackMode == PlaybackMode.Pinned) {

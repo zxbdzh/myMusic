@@ -1,6 +1,9 @@
 package com.mytv.mymusic
 
 import com.mytv.mymusic.aggregate.AggregationSettings
+import com.mytv.mymusic.aggregate.PlatformPlaybackPreference
+import com.mytv.mymusic.aggregate.PlaybackMethod
+import com.mytv.mymusic.aggregate.PlaybackMode
 import com.mytv.mymusic.aggregate.Resolution
 import com.mytv.mymusic.aggregate.SourcePolicy
 import com.mytv.mymusic.aggregate.SourceResolver
@@ -23,6 +26,7 @@ class LxSourceResolverTest {
         var fail = false
         var generation = 0L
         var supported = setOf("kugou")
+        var nativePreview = emptySet<String>()
         var nativeCalls = 0
         var lxCalls = 0
         var songSelector: (List<Song>) -> Song = { it.first() }
@@ -32,7 +36,12 @@ class LxSourceResolverTest {
 
         override suspend fun playableStream(song: Song, cookie: String, workDir: File, quality: AudioQuality): PlayableStream {
             nativeCalls++
-            return PlayableStream(url = "https://native.example.com/${song.source}.mp3", ext = "mp3", bitrate = 320)
+            return PlayableStream(
+                url = "https://native.example.com/${song.source}.mp3",
+                ext = "mp3",
+                bitrate = 320,
+                preview = song.source in nativePreview,
+            )
         }
 
         override suspend fun playableLxStream(songs: List<Song>, quality: AudioQuality): LxPlaybackResult? {
@@ -100,6 +109,112 @@ class LxSourceResolverTest {
         assertEquals(1, repository.nativeCalls)
         assertEquals(0, repository.lxCalls)
         assertFalse(ready.source.song.extra.containsKey("lx_source"))
+    }
+
+    @Test
+    fun loggedInNeteasePrefersItsOwnLxVersion() = runBlocking {
+        val song = Song(id = "wy", name = "晴天", source = "netease")
+        val track = TrackMatcher.singleSource(song, "网易云音乐", "netease")
+        val resolver = SourceResolver(
+            repository = CustomRepository().apply { supported = setOf("netease") },
+            cookies = { mapOf("netease" to "test-account") },
+            settings = {
+                AggregationSettings(
+                    platformPlayback = mapOf("netease" to PlatformPlaybackPreference(PlaybackMode.Priority, PlaybackMethod.Lx)),
+                )
+            },
+            workDir = { File(".") },
+        )
+
+        val ready = resolver.resolve(track) as Resolution.Ready
+
+        assertEquals("https://cdn.example.com/full.mp3", ready.url)
+        assertEquals(song.key, ready.source.song.key)
+        assertEquals("洛雪 · 测试脚本", ready.source.actualProviderName)
+    }
+
+    @Test
+    fun fixedLxStopsWhenTheScriptCannotPlay() = runBlocking {
+        val song = Song(id = "wy", name = "晴天", source = "netease")
+        val resolver = SourceResolver(
+            repository = CustomRepository().apply {
+                supported = setOf("netease")
+                fail = true
+            },
+            cookies = { mapOf("netease" to "test-account") },
+            settings = {
+                AggregationSettings(
+                    platformPlayback = mapOf("netease" to PlatformPlaybackPreference(PlaybackMode.Pinned, PlaybackMethod.Lx)),
+                    allowPreview = true,
+                )
+            },
+            workDir = { File(".") },
+        )
+
+        val result = resolver.resolve(TrackMatcher.singleSource(song, "网易云音乐", "netease"))
+
+        val failure = result as Resolution.None
+        assertEquals(PlaybackMethod.Lx, failure.fixedSource?.playbackMethod)
+        assertFalse(failure.attempts.any { it.source.playbackMethod == PlaybackMethod.Direct })
+    }
+
+    @Test
+    fun directPreviewFallsBackToTheSamePlatformsLxBeforeAnotherPlatform() = runBlocking {
+        val song = Song(id = "wy", name = "晴天", source = "netease")
+        val target = TrackMatcher.withSource(
+            TrackMatcher.singleSource(song, "网易云音乐"),
+            nativeSource("qq", "tx"),
+        )
+        val repository = CustomRepository().apply {
+            supported = setOf("netease", "qq")
+            nativePreview = setOf("netease")
+        }
+        val resolver = SourceResolver(
+            repository = repository,
+            cookies = { mapOf("netease" to "test-account") },
+            settings = {
+                AggregationSettings(
+                    platformPlayback = mapOf("netease" to PlatformPlaybackPreference(PlaybackMode.Priority, PlaybackMethod.Direct)),
+                    allowPreview = true,
+                )
+            },
+            workDir = { File(".") },
+        )
+
+        val ready = resolver.resolve(target) as Resolution.Ready
+
+        assertEquals(song.key, ready.source.song.key)
+        assertEquals(PlaybackMethod.Lx, ready.source.playbackMethod)
+        assertFalse(ready.isPreview)
+        assertEquals(1, repository.nativeCalls)
+    }
+
+    @Test
+    fun platformEntryTriesItsPreferenceBeforeTheGlobalSelection() = runBlocking {
+        val source = nativeSource("netease", "wy")
+        val grouped = TrackMatcher.withSource(
+            TrackMatcher.singleSource(source.song, "网易云音乐"),
+            nativeSource("qq", "tx"),
+        )
+        val resolver = SourceResolver(
+            repository = CustomRepository().apply { supported = setOf("netease", "qq") },
+            cookies = { emptyMap() },
+            settings = {
+                AggregationSettings(
+                    playbackMode = PlaybackMode.Pinned,
+                    pinnedProvider = "qq",
+                    pinnedOnly = true,
+                    platformPlayback = mapOf("netease" to PlatformPlaybackPreference(PlaybackMode.Priority, PlaybackMethod.Lx)),
+                )
+            },
+            workDir = { File(".") },
+        )
+
+        val fromPlatform = resolver.resolve(grouped.copy(playbackPlatform = "netease")) as Resolution.Ready
+        val fromAggregate = resolver.resolve(grouped) as Resolution.Ready
+
+        assertEquals(PlaybackMethod.Lx, fromPlatform.source.playbackMethod)
+        assertEquals("qq", fromAggregate.source.providerId)
     }
 
     @Test

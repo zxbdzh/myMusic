@@ -26,6 +26,7 @@ import androidx.room.Upsert
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.mytv.mymusic.aggregate.AggregationSettings
+import com.mytv.mymusic.aggregate.PlatformPlaybackPreference
 import com.mytv.mymusic.data.local.LocalMusicSettings
 import com.mytv.mymusic.data.local.LocalTrackDao
 import com.mytv.mymusic.data.local.LocalRefDao
@@ -374,8 +375,10 @@ private val syncSizeLimitKey = intPreferencesKey("sync_size_limit_mb")
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     val state: Flow<AppSettings> = context.dataStore.data.map { values ->
+        val savedCredentials = runCatching { json.decodeFromString<Map<String, String>>(values[cookiesKey] ?: "{}") }
+            .getOrDefault(emptyMap())
         AppSettings(
-            provider = values[providerKey] ?: "netease",
+            provider = values[providerKey]?.catalogProviderId() ?: "netease",
             chartsSource = values[chartsSourceKey] ?: "",
             playlistsSource = values[playlistsSourceKey] ?: "",
             startupTab = values[startupTabKey] ?: "",
@@ -383,8 +386,8 @@ private val syncSizeLimitKey = intPreferencesKey("sync_size_limit_mb")
             listenGroup = values[listenGroupKey] ?: "",
             theme = values[themeKey] ?: "system",
             layoutMode = values[layoutModeKey] ?: "Auto",
-            cookies = runCatching { json.decodeFromString<Map<String, String>>(values[cookiesKey] ?: "{}") }
-                .getOrDefault(emptyMap()),
+            cookies = savedCredentials - APPLE_CARD_KEY,
+            appleCard = savedCredentials[APPLE_CARD_KEY].orEmpty(),
             favoriteSync = favoriteSyncPreferences(values[favoriteSyncKey]),
             sodaSignerUrl = values[sodaSignerUrlKey] ?: "",
             sodaSignerToken = values[sodaSignerTokenKey] ?: "",
@@ -393,7 +396,7 @@ private val syncSizeLimitKey = intPreferencesKey("sync_size_limit_mb")
             metadataFallback = values[metadataFallbackKey] ?: true,
             aggregation = runCatching {
                 json.decodeFromString<AggregationSettings>(values[aggregationKey] ?: "")
-            }.getOrDefault(AggregationSettings()),
+            }.getOrDefault(AggregationSettings()).withCatalogProviders(),
             localMusic = runCatching {
                 json.decodeFromString<LocalMusicSettings>(values[localMusicKey] ?: "")
             }.getOrDefault(LocalMusicSettings()),
@@ -803,6 +806,14 @@ suspend fun syncSizeLimitMb(value: Int) = context.dataStore.edit {
         it[aggregationKey] = json.encodeToString(value)
     }
 
+    suspend fun setPlatformPlayback(providerId: String, value: PlatformPlaybackPreference) = context.dataStore.edit {
+        val current = runCatching { json.decodeFromString<AggregationSettings>(it[aggregationKey].orEmpty()) }
+            .getOrDefault(AggregationSettings()).withCatalogProviders()
+        it[aggregationKey] = json.encodeToString(
+            current.copy(platformPlayback = current.platformPlayback + (providerId to value)),
+        )
+    }
+
     /** 设置 › 本地音乐：在 edit 里读旧值再改，扫描写“上次扫描时间”和用户改开关同时发生也不会互相覆盖。 */
     suspend fun localMusic(transform: (LocalMusicSettings) -> LocalMusicSettings) = context.dataStore.edit {
         val current = runCatching { json.decodeFromString<LocalMusicSettings>(it[localMusicKey] ?: "") }
@@ -858,6 +869,7 @@ data class AppSettings(
     /** 界面布局：Auto / Phone / Tablet / Tv。 */
     val layoutMode: String = "Auto",
     val cookies: Map<String, String> = emptyMap(),
+    val appleCard: String = "",
     val favoriteSync: Map<String, FavoriteSyncPreference> = emptyMap(),
     /**
      * 汽水签名器（sodam / libmssdk 的 /sign 协议）。地址和 Token 留空表示用内置的

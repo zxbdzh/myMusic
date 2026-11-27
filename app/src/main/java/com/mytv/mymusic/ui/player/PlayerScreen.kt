@@ -329,8 +329,10 @@ fun PlayerScreen(
     }
 
     val source = state.currentSource
-    val sourceProvider = source?.actualProviderName
+    val fixedFailure = state.fixedPlaybackFailure
+    val sourceProvider = if (fixedFailure.isNotBlank()) "仅本次换源" else source?.actualProviderName
     val sourceDetail = source?.qualityLabel?.takeUnless { it == "音质未知" }.orEmpty()
+    val notice = fixedFailure.ifBlank { state.playbackNotice }
     val playbackMode = modeLabel(state.aggregation.playbackMode)
     val onSkip: (Int) -> Unit = { direction -> actions.transport(if (direction > 0) "next" else "previous") }
     // 电视全屏歌词页的快退快进：直播没有进度可拖，按了也不提示
@@ -341,7 +343,9 @@ fun PlayerScreen(
         }
     }
     val onOpenSource: () -> Unit = {
-        state.currentTrack?.let { track -> actions.openSource(track, state.canonicalQueue.ifEmpty { listOf(track) }) }
+        state.currentTrack?.let { track ->
+            actions.openSource(track, state.canonicalQueue.ifEmpty { listOf(track) }, onlyOnce = fixedFailure.isNotBlank())
+        }
     }
     val onFavoriteBurst: () -> Unit = {
         if (!favorite) actions.favorite(song)
@@ -416,7 +420,7 @@ fun PlayerScreen(
                     sourceProvider = sourceProvider,
                     sourceDetail = sourceDetail,
                     playbackMode = playbackMode,
-                    notice = state.playbackNotice,
+                    notice = notice,
                     actions = actions,
                     idle = idle,
                     pulse = pulse,
@@ -446,7 +450,7 @@ fun PlayerScreen(
                     sourceProvider = sourceProvider,
                     sourceDetail = sourceDetail,
                     playbackMode = playbackMode,
-                    notice = state.playbackNotice,
+                    notice = notice,
                     deepLink = state.deepLink,
                     actions = actions,
                     top = state.tabletopTop,
@@ -478,7 +482,7 @@ fun PlayerScreen(
                     sourceProvider = sourceProvider,
                     sourceDetail = sourceDetail,
                     playbackMode = playbackMode,
-                    notice = state.playbackNotice,
+                    notice = notice,
                     deepLink = state.deepLink,
                     actions = actions,
                     idle = idle,
@@ -510,7 +514,7 @@ fun PlayerScreen(
                     sourceProvider = sourceProvider,
                     sourceDetail = sourceDetail,
                     playbackMode = playbackMode,
-                    notice = state.playbackNotice,
+                    notice = notice,
                     deepLink = state.deepLink,
                     actions = actions,
                     idle = idle,

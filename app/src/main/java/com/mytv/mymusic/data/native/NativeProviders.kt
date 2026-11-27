@@ -1,6 +1,7 @@
 package com.mytv.mymusic.data.native
 
 import com.mytv.mymusic.data.ProviderInfo
+import com.mytv.mymusic.data.catalogProviderId
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -12,7 +13,6 @@ object NativeProviders {
         addProvider { KuwoProvider() }
         addProvider { MiguProvider() }
         addProvider { AppleProvider() }
-        addProvider { AppleCardProvider() }
         addProvider { JooxProvider() }
         addProvider { QianqianProvider() }
         addProvider { BilibiliProvider() }
@@ -47,7 +47,7 @@ object NativeProviders {
         dynamicProviders.removeAll { it.info.id == id }
     }
 
-    fun get(id: String): NativeProvider? = all().firstOrNull { it.info.id == id }
+    fun get(id: String): NativeProvider? = all().firstOrNull { it.info.id == id.catalogProviderId() }
     fun all(): List<NativeProvider> = staticProviders + dynamicProviders
     fun infos(): List<ProviderInfo> = all().map { it.info }
 

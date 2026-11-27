@@ -1,6 +1,8 @@
 package com.mytv.mymusic.aggregate
 
+import com.mytv.mymusic.data.APPLE_CARD_KEY
 import com.mytv.mymusic.data.Song
+import com.mytv.mymusic.data.catalogProviderId
 import java.security.MessageDigest
 import java.util.Locale
 import kotlin.math.abs
@@ -165,8 +167,11 @@ object TrackMatcher {
         providerId: String = song.source.ifBlank { "unknown" },
         cookie: String = "",
     ): CanonicalTrack {
-        val normalized = TrackNormalizer.normalize(song, providerId)
-        val source = sourceOf(providerId, mapOf(providerId to providerName), mapOf(providerId to cookie), song, 1, 1f, MatchMethod.Native)
+        val catalogId = providerId.catalogProviderId()
+        val catalogSong = if (song.source == APPLE_CARD_KEY) song.copy(source = catalogId) else song
+        val normalized = TrackNormalizer.normalize(catalogSong, catalogId)
+        val source = sourceOf(catalogId, mapOf(catalogId to providerName), mapOf(catalogId to cookie), catalogSong, 1, 1f, MatchMethod.Native)
+            .let { if (providerId == APPLE_CARD_KEY) it.copy(playbackMethod = PlaybackMethod.AppleCard) else it }
         return CanonicalTrack(
             id = canonicalId(normalized),
             title = song.name.ifBlank { normalized.displayTitle },
@@ -178,6 +183,7 @@ object TrackMatcher {
             sources = listOf(source),
             alternatives = emptyList(),
             confidence = 1f,
+            playbackPlatform = catalogId.takeIf { providerId == APPLE_CARD_KEY },
         )
     }
 

@@ -4,6 +4,7 @@ import com.mytv.mymusic.data.lx.LxPlayback
 import com.mytv.mymusic.data.lx.LxPlaybackResult
 import com.mytv.mymusic.data.lx.LxSources
 import com.mytv.mymusic.data.native.AccountInfo
+import com.mytv.mymusic.data.native.AppleCardProvider
 import com.mytv.mymusic.data.native.AudioQuality
 import com.mytv.mymusic.data.native.NativeProvider
 import com.mytv.mymusic.data.native.NativeProviders
@@ -15,6 +16,8 @@ import java.io.File
 open class MusicRepository(
     private val lxPlayback: LxPlayback = LxSources,
 ) {
+    private val appleCard by lazy { AppleCardProvider() }
+
     suspend fun providers(): List<ProviderInfo> = NativeProviders.infos()
 
     suspend fun searchSongs(provider: String, cookie: String, keyword: String): List<Song> =
@@ -40,6 +43,9 @@ open class MusicRepository(
         workDir: File,
         quality: AudioQuality = AudioQuality.Auto,
     ): PlayableStream = requireProvider(song.source).playableStream(cookie, song, workDir, quality)
+
+    open suspend fun playableAppleCardStream(song: Song, card: String, workDir: File, quality: AudioQuality): PlayableStream =
+        appleCard.playableStream(card, song, workDir, quality)
 
     suspend fun downloadUrl(song: Song, cookie: String, quality: AudioQuality = AudioQuality.Auto): String =
         requireProvider(song.source).downloadUrl(cookie, song, quality)

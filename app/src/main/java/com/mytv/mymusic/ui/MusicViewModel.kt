@@ -6975,18 +6975,18 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 令牌按 origin 取：换地址不会读到另一台服务的令牌。 */
     suspend fun hasShareToken(): Boolean {
-        val origin = com.mytv.mymusic.data.share.normalizeShareServerUrl(base.value.share.serverUrl) ?: return false
+        val origin = com.mytv.mymusic.data.share.normalizeShareServerUrl(settingsState.value.share.serverUrl) ?: return false
         return app.secretStore.secret(com.mytv.mymusic.data.share.shareTokenName(origin))?.isNotBlank() == true
     }
 
     /** 令牌存进本机加密存储（AndroidKeyStore），不进设置文件也不进同步。 */
     fun saveShareToken(token: String) = viewModelScope.launch {
-        val origin = com.mytv.mymusic.data.share.normalizeShareServerUrl(base.value.share.serverUrl) ?: return@launch
+        val origin = com.mytv.mymusic.data.share.normalizeShareServerUrl(settingsState.value.share.serverUrl) ?: return@launch
         app.secretStore.saveSecret(com.mytv.mymusic.data.share.shareTokenName(origin), token.trim())
     }
 
     fun removeShareToken() = viewModelScope.launch {
-        val origin = com.mytv.mymusic.data.share.normalizeShareServerUrl(base.value.share.serverUrl) ?: return@launch
+        val origin = com.mytv.mymusic.data.share.normalizeShareServerUrl(settingsState.value.share.serverUrl) ?: return@launch
         app.secretStore.removeSecret(com.mytv.mymusic.data.share.shareTokenName(origin))
     }
 
@@ -7010,7 +7010,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         clip: com.mytv.mymusic.data.share.ShareClipRange?,
     ) = viewModelScope.launch {
         val context = getApplication<Application>()
-        val origin = com.mytv.mymusic.data.share.normalizeShareServerUrl(base.value.share.serverUrl)
+        val origin = com.mytv.mymusic.data.share.normalizeShareServerUrl(settingsState.value.share.serverUrl)
         if (origin == null) {
             message("先在设置 › 在线分享里填写分享服务地址", error = true)
             return@launch
@@ -7063,7 +7063,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     val shareList: StateFlow<com.mytv.mymusic.data.share.ShareListUi> = _shareList
 
     fun loadShares() = viewModelScope.launch {
-        val origin = com.mytv.mymusic.data.share.normalizeShareServerUrl(base.value.share.serverUrl)
+        val origin = com.mytv.mymusic.data.share.normalizeShareServerUrl(settingsState.value.share.serverUrl)
         if (origin == null) {
             _shareList.value = com.mytv.mymusic.data.share.ShareListUi(error = "还没有配置分享服务地址")
             return@launch
@@ -7084,7 +7084,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun revokeShare(id: String) = viewModelScope.launch {
-        val origin = com.mytv.mymusic.data.share.normalizeShareServerUrl(base.value.share.serverUrl) ?: return@launch
+        val origin = com.mytv.mymusic.data.share.normalizeShareServerUrl(settingsState.value.share.serverUrl) ?: return@launch
         val token = app.secretStore.secret(com.mytv.mymusic.data.share.shareTokenName(origin)).orEmpty()
         if (token.isBlank() || id.isBlank()) return@launch
         runCatching { com.mytv.mymusic.data.share.ShareServiceClient(origin, token, http).revoke(id) }

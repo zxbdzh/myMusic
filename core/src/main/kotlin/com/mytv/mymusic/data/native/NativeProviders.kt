@@ -63,8 +63,10 @@ object NativeProviders {
             addProvider { SodaProvider() }
             addProvider { YuntingProvider() }
         }
-        // 只有"该有的都在"才缓存：缺平台时下次访问重建，避免登记晚一步就被永久漏掉
-        if (built.size >= EXPECTED_STATIC) cachedStatic = built
+        // 缺平台的列表也缓存：桌面端永远缺 apple/spotify/mhub，不缓存的话每次取 provider
+        // 都会重建 13 个实例并打印三份 "provider init failed" 堆栈；registerFactory 会作废
+        // 缓存，所以晚登记的平台仍能补上（见 registerFactory 的 cachedStatic = null）
+        cachedStatic = built
         built
     }
 

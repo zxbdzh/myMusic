@@ -190,20 +190,20 @@ $env:ANDROID_HOME="$env:LOCALAPPDATA\Android\Sdk"
 
 | 编号 | 项目 | 标准 | 实测 | 判定 | 证据 | 责任人 |
 | --- | --- | --- | --- | --- | --- | --- |
-| A-1 | 同屏行数 | ≥18 行 | 榜单 15 完整（+1 裁切）；我的 21；搜索 4（数据） | **FAIL（榜单）** | `01-charts.png`、`04-library.png` | ui2 |
+| A-1 | 同屏行数 | ≥18 行 | 首页 **19 行**（WIP 新版）；详情 17 行（行距 12→0 后预计 23，待复测）；我的 21；搜索数据限制 | **已修（WIP）** | `F:/tmp/pc-native-ui/01-charts.png`、`09-collection.png`、`10-playlist-detail.png` | ui2 |
 | A-2 | 正文 | ≤13sp | 13sp | PASS | `Metrics.kt:79` | ui2 |
 | A-3 | 区块标题 | ≤15sp | 15sp | PASS | `Metrics.kt:84` | ui2 |
-| A-4 | 页面标题 | ≤22sp | 22sp | PASS | `Metrics.kt:85` | ui2 |
+| A-4 | 页面标题 | ≤22sp | 22sp → **20sp**（WIP，更严） | PASS | `Metrics.kt:85` | ui2 |
 | A-5 | 行高 | ≤36 / ≤48dp | 32 / 48dp | PASS | `Metrics.kt:91,93` | ui2 |
-| A-6 | 水平边距 | ≤20dp | 20dp | PASS | `Metrics.kt:104` | ui2 |
+| A-6 | 水平边距 | ≤20dp | 20dp → **16dp**（WIP，更严） | PASS | `Metrics.kt:104` | ui2 |
 | A-7 | 卡片圆角 | ≤12dp | 10 / 8dp | PASS | `Metrics.kt:112-113` | ui2 |
 | B-1 | 行 hover | 变色 | 100ms 三态 | PASS | `Metrics.kt:366-375` | ui2 |
 | B-2 | 卡片 hover 播放键 | 显示 | `if(hovered)` 角标 | PASS | `ChartsPage.kt:284` | ui2 |
-| B-3 | 右键菜单 | ≥5 项 | 6 项 | PASS | `Metrics.kt:317-330` | ui2 |
+| B-3 | 右键菜单 | ≥5 项 | 6 项（项高 48→**30dp** WIP） | PASS | `Metrics.kt:317-330` | ui2 |
 | B-4 | 双击播放 | 有 | 400ms 双击 | PASS | `Metrics.kt:410-417` | ui2 |
 | B-5 | Ctrl/Shift 多选 | 有 | 有 + 已选 N | PASS | `Metrics.kt:416` | ui2 |
-| B-6 | 细滚动条 | 8dp 可见 | API 有、**零接入** | **FAIL** | `DesktopInteraction.kt:338` | ui2/audio2 |
-| B-7 | tooltip | 800ms | API 有、**零接入** | **FAIL** | `DesktopInteraction.kt:270` | ui2/audio2 |
+| B-6 | 细滚动条 | 8dp 可见 | API 有、**零接入**（转 Sol） | **FAIL** | `DesktopInteraction.kt:338` | ui2/audio2 → Sol |
+| B-7 | tooltip | 800ms | API 有、**零接入**（转 Sol） | **FAIL** | `DesktopInteraction.kt:270` | ui2/audio2 → Sol |
 | C-1 | 菜单栏 4 项 | 4 项 | 4 项 | PASS | `AppMenuBar.kt` | win2 |
 | C-2 | 菜单快捷键提示 | 有 | KeyShortcut | PASS | `Shortcuts.kt` | win2 |
 | C-3 | 动态标题 | 随曲目 | `正在播放 - 歌名 - myMusic` | PASS | `WindowsShell` | win2 |
@@ -214,16 +214,20 @@ $env:ANDROID_HOME="$env:LOCALAPPDATA\Android\Sdk"
 | D-4 | 进度条气泡 | hover 时间 | PcSeekBar | PASS | `PcChrome.kt` | audio2 |
 | D-5 | 窄窗迷你条 | <1200dp / ≤56dp | 1200 断点 / 56dp | PASS | `AppShell.kt:65,77` | audio2 |
 
-**统计：契约 23 条 → 20 PASS / 3 FAIL。** 三处 FAIL 的修复建议（按优先级）见 AUDIT §三。
+**统计：契约 23 条 → 20 PASS / 3 FAIL（基于提交版本 1bd4da9）。**
+修复轮（WIP，未提交）进展见 `AUDIT §七`：A-1 榜单首页已到 **19 行**、详情页两页已补图（17 行，行距改 0 待复测）、
+A-4/A-6 进一步收紧、菜单项高改 30dp；**B-6/B-7 未修，已转 Sol（t17 收尾）**。
 
-### 非阻塞观察项（8 条）
+### 非阻塞观察项（8 条 → 修复轮后剩 5 条）
 
-导航 96dp 竖排、网格封面 168dp、右键菜单项高 48dp、列表内键盘导航/焦点环、`UI-METRICS.md` 行数自相矛盾、
-`AppShell.kt:62` 注释过期（380dp）、播放模式只显示不生效、均衡器/淡化/定时入口未接。
+导航 96dp 竖排（未改）、列表内键盘导航/焦点环（转 Sol）、`UI-METRICS.md` 行数待 Sol 统一、
+`AppShell.kt:62` 注释过期（380dp）、播放模式只显示不生效、均衡器/淡化/定时入口未接（P2）。
+~~网格封面 168dp~~（→160dp WIP）、~~右键菜单项高 48dp~~（→30dp WIP）。
 
-### 证据缺口（3 处）
+### 证据缺口（3 处 → 剩 2 处）
 
-榜单/歌单详情页无 1440×900 截图（截图 runner 缺 collection 场景）；搜索 ≥18 行需多结果查询词；
+~~榜单/歌单详情无截图~~（已补 `09-collection.png` / `10-playlist-detail.png`）；
+搜索页 ≥18 行判定为「数据限制」（QQ 短词返回 1–4 条，结构支持 20+）；
 菜单展开态无法自动截图（CMP 限制）；高 DPI 与 Alt+Tab 未测。
 
 ---
@@ -234,6 +238,7 @@ $env:ANDROID_HOME="$env:LOCALAPPDATA\Android\Sdk"
 | --- | --- | --- | --- | --- | --- |
 | 基线 | 2026-11-27 | t4（134425d） | `F:\tmp\mymusic-pc-shots-final` | 见初版台账 | 「平板放大版」，被用户否决 |
 | 第 1 轮 | 2026-11-27 | t15 `de744c8` / t16 `a48f9c5` / t17 `0b0f719` | `F:\tmp\mymusic-pc-shots-window`（8 张 1440×900 + 实拍）、`F:\tmp\pc-player-final`（播放侧 3 张） | **20 PASS / 3 FAIL** | 密度已 PC 化；剩 1 项硬指标 + 2 项接入 |
+| 修复轮 | 2026-11-27 | WIP（未提交，captain 暂停构建） | `F:\tmp\pc-native-ui`（新版 01-charts + 09/10/11） | 见 AUDIT §七 | 首页 19 行达标；详情页待复测；滚动条/tooltip 转 Sol |
 
 ---
 

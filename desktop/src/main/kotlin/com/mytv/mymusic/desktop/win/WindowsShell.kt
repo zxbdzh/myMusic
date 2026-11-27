@@ -119,15 +119,18 @@ class WindowsShell private constructor(
      * 并返回是否成功——调用方（Compose 的 `LaunchedEffect`）用 `delay` 重试，
      * 不能在这里 `Thread.sleep`，否则会堵住刚起来的事件线程。
      *
+     * 标题参数：产品主窗口的标题随播放状态变化（`正在播放 - … - myMusic`），所以默认
+     * 走 [Win32.findMainWindow] 的模式匹配；自检窗口传精确标题时才用等值查找。
+     *
      * @return 任务栏按钮是否装上（非 Windows 平台恒为 false）
      */
-    fun attachMainWindow(window: ComposeWindow, title: String = DEFAULT_MAIN_TITLE): Boolean {
+    fun attachMainWindow(window: ComposeWindow, title: String? = null): Boolean {
         mainWindow = window
-        mainWindowTitle = title
+        if (title != null) mainWindowTitle = title
         if (!Win32.isWindows) return false
         if (taskbar?.installed == true) return true
 
-        val hwnd = Win32.findTopLevelWindow(title) ?: return false
+        val hwnd = (if (title != null) Win32.findTopLevelWindow(title) else Win32.findMainWindow()) ?: return false
         taskbar = TaskbarThumbnailButtons(
             hwnd = hwnd,
             buttons = listOf(
@@ -176,7 +179,7 @@ class WindowsShell private constructor(
             window.requestFocus()
         }
         // AWT 的 toFront 在部分场景被前台锁挡住，再走一次 Win32
-        runCatching { Win32.findTopLevelWindow(mainWindowTitle)?.let { Win32.user32.SetForegroundWindow(it) } }
+        runCatching { Win32.findMainWindow()?.let { Win32.user32.SetForegroundWindow(it) } }
     }
 
     /** 关闭按钮 → 收进托盘（而不是退出）。没有托盘时不能隐藏，否则用户点不回来。 */
@@ -209,12 +212,13 @@ class WindowsShell private constructor(
 
     companion object {
         /**
-         * 主窗口标题。
+         * 无播放时的主窗口标题（t17 起标题动态化：`正在播放 - {歌名} - myMusic`）。
          *
-         * 必须与 `Main.kt` 里 `Window(title = ...)` 的字符串**逐字相同**：
-         * 任务栏缩略图按钮靠 `EnumWindows` + 标题找 HWND，差一个全角点都找不到。
+         * 任务栏缩略图按钮不再按"逐字标题"找窗口——[Win32.findMainWindow] 按
+         * 「等于 myMusic 或以 ` - myMusic` 结尾」的模式匹配，产品窗口与自检窗口都能对上。
+         * 这个常量仍作为无播放态的默认标题与文档锚点使用。
          */
-        const val DEFAULT_MAIN_TITLE = "myMusic · 桌面版"
+        const val DEFAULT_MAIN_TITLE = "myMusic"
 
         /** 缩略图按钮 id：与 `THUMBBUTTON.iId` 一一对应，改一个就要改两处。 */
         const val THUMB_PREVIOUS = 1

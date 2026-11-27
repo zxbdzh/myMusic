@@ -257,7 +257,23 @@ internal object Win32 {
      * @param title 窗口标题；同一进程里可能有多个顶层窗口（主窗口 + 悬浮歌词窗），标题是
      *   唯一稳定的区分依据。
      */
-    fun findTopLevelWindow(title: String, className: String = "SunAwtFrame"): Pointer? {
+    fun findTopLevelWindow(title: String, className: String = "SunAwtFrame"): Pointer? =
+        findTopLevelWindowWhere(className) { it == title }
+
+    /**
+     * 找主窗口：标题会随播放状态变化（"正在播放 - {歌名} - myMusic" / "myMusic"），
+     * 不能再用等值匹配。判定规则与 `Main.kt` 的 `windowTitle()` 一一对应：
+     *  - 无播放：`myMusic`
+     *  - 有播放：`正在播放 - {歌名} - myMusic`
+     * 悬浮歌词窗的标题是「myMusic 悬浮歌词」，不落在这两种形状里。
+     */
+    fun findMainWindow(className: String = "SunAwtFrame"): Pointer? =
+        findTopLevelWindowWhere(className) { title -> title == MAIN_WINDOW_TITLE || title.endsWith(" - $MAIN_WINDOW_TITLE") }
+
+    /** 无播放时的窗口标题（`Main.kt` 与查找逻辑共用，避免两处漂移）。 */
+    const val MAIN_WINDOW_TITLE = "myMusic"
+
+    private fun findTopLevelWindowWhere(className: String, match: (String) -> Boolean): Pointer? {
         val pid = ProcessHandle.current().pid().toInt()
         var found: Pointer? = null
         val callback = EnumWindowsCallback { hWnd, _ ->
@@ -273,9 +289,8 @@ internal object Win32 {
                     val clsLen = user32.GetClassNameW(hWnd, cls, cls.size)
                     val text = CharArray(512)
                     val textLen = user32.GetWindowTextW(hWnd, text, text.size)
-                    if (charArrayToString(cls, clsLen).contains(className) &&
-                        charArrayToString(text, textLen) == title
-                    ) {
+                    val title = charArrayToString(text, textLen)
+                    if (charArrayToString(cls, clsLen).contains(className) && match(title)) {
                         found = hWnd
                         false
                     } else {

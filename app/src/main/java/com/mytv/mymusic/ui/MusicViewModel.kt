@@ -6649,6 +6649,23 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { app.settings.swipe(transform) }
     fun setSharePrefs(transform: (com.mytv.mymusic.data.SharePrefs) -> com.mytv.mymusic.data.SharePrefs) =
         viewModelScope.launch { app.settings.share(transform) }
+
+    /** 令牌按 origin 取：换地址不会读到另一台服务的令牌。 */
+    suspend fun hasShareToken(): Boolean {
+        val origin = com.mytv.mymusic.data.share.normalizeShareServerUrl(base.value.share.serverUrl) ?: return false
+        return app.secretStore.secret(com.mytv.mymusic.data.share.shareTokenName(origin))?.isNotBlank() == true
+    }
+
+    /** 令牌存进本机加密存储（AndroidKeyStore），不进设置文件也不进同步。 */
+    fun saveShareToken(token: String) = viewModelScope.launch {
+        val origin = com.mytv.mymusic.data.share.normalizeShareServerUrl(base.value.share.serverUrl) ?: return@launch
+        app.secretStore.saveSecret(com.mytv.mymusic.data.share.shareTokenName(origin), token.trim())
+    }
+
+    fun removeShareToken() = viewModelScope.launch {
+        val origin = com.mytv.mymusic.data.share.normalizeShareServerUrl(base.value.share.serverUrl) ?: return@launch
+        app.secretStore.removeSecret(com.mytv.mymusic.data.share.shareTokenName(origin))
+    }
     fun setLyricStage(transform: (LyricStagePrefs) -> LyricStagePrefs) = viewModelScope.launch { app.settings.lyricStage(transform) }
     fun setLyricText(transform: (LyricTextPrefs) -> LyricTextPrefs) = viewModelScope.launch { app.settings.lyricText(transform) }
     suspend fun lyricMemory(songKey: String): LyricMemoryEntry? = app.settings.lyricMemory(songKey)

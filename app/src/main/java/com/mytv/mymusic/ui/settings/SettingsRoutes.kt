@@ -140,6 +140,10 @@ private fun SectionContent(
             onOpenAccounts = { onOpen(SettingsSection.Accounts) },
             onConnectWebDav = { app.nav.navigate(com.mytv.mymusic.ui.local.localWebDavRoute(app)) { launchSingleTop = true } },
         )
+        SettingsSection.Sharing -> {
+            val state by app.model.state.collectAsState()
+            OnlineSharingSettingsScreen(state, actions, onBack, embedded)
+        }
         SettingsSection.Storage -> StorageContent(app, onBack, embedded, onCacheCleared)
         SettingsSection.About -> {
             val state by app.model.state.collectAsState()

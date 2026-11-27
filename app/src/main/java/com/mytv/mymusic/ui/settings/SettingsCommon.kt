@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.PrivacyTip
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Swipe
@@ -93,6 +94,7 @@ internal enum class SettingsSection(
     Subsonic("settings/accounts/servers", "音乐服务器", "Navidrome、Airsonic 与 Subsonic 曲库", Icons.Filled.Dns, IconTone.Secondary),
     Sync("settings/sync", "音乐库同步", "自建歌单的云端同步", Icons.Filled.Cloud, IconTone.Secondary),
     LocalMusic("settings/local", "本地音乐", "扫描范围、封面歌词匹配与上传", Icons.Filled.AudioFile, IconTone.Secondary),
+    Sharing("settings/sharing", "在线分享", "自建分享服务、听歌链接与撤销", Icons.Filled.Link, IconTone.Secondary),
     InputPanel("settings/input-panel", "手机辅助输入", "文字、音源与常用设置", Icons.Filled.PhoneAndroid, IconTone.Secondary),
     Storage("settings/storage", "存储", "缓存、下载与占用", Icons.Filled.Storage, IconTone.Tertiary),
     About("settings/about", "关于与更新", "版本、更新、许可与隐私", Icons.Filled.Info, IconTone.Tertiary),
@@ -111,7 +113,7 @@ internal enum class SettingsSection(
         /** 设置首页 / 双栏左栏的三组。 */
         val groups = listOf(
             listOf(Appearance, Lyrics, Playback, Report, Equalizer, Sources, Search, Swipe),
-            listOf(Accounts, Sync, LocalMusic, InputPanel),
+            listOf(Accounts, Sync, LocalMusic, Sharing, InputPanel),
             listOf(Storage, About),
         )
 

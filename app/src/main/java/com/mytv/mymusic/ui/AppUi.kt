@@ -308,6 +308,11 @@ class MusicActions(private val model: MusicViewModel) {
         model.setSwipePrefs(transform)
     fun setSharePrefs(transform: (com.mytv.mymusic.data.SharePrefs) -> com.mytv.mymusic.data.SharePrefs) =
         model.setSharePrefs(transform)
+
+    /** 当前配置的分享服务上是否已经保存令牌（设置 › 在线分享 用它显示状态）。 */
+    suspend fun hasShareToken(): Boolean = model.hasShareToken()
+    fun saveShareToken(token: String) = model.saveShareToken(token)
+    fun removeShareToken() = model.removeShareToken()
     fun setLyricStage(transform: (com.mytv.mymusic.data.LyricStagePrefs) -> com.mytv.mymusic.data.LyricStagePrefs) =
         model.setLyricStage(transform)
     fun setLyricText(transform: (com.mytv.mymusic.data.LyricTextPrefs) -> com.mytv.mymusic.data.LyricTextPrefs) =

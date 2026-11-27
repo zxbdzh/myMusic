@@ -19,6 +19,16 @@ class SharePrefsTest {
         assertEquals(ShareTextFormat.WithSong, prefs.textFormat)
         assertEquals(0xFFD8F05A.toInt(), prefs.customBackground)
         assertEquals(0xFF14140F.toInt(), prefs.customContent)
+        // 没配过分享服务：地址是空串，不是某个默认实例
+        assertEquals("", prefs.serverUrl)
+    }
+
+    @Test
+    fun `share service address round-trips`() {
+        val prefs = SharePrefs(serverUrl = "https://share.example.com")
+        val values = mutablePreferencesOf()
+        SharePrefsCodec.write(values, prefs)
+        assertEquals("https://share.example.com", SharePrefsCodec.read(values).serverUrl)
     }
 
     @Test
@@ -62,11 +72,12 @@ class SharePrefsTest {
             listOf(
                 "share_style", "share_palette", "share_corners", "share_shape", "share_full",
                 "share_translation", "share_text_format", "share_custom_bg", "share_custom_fg",
+                "share_server_url",
             ),
             listOf(
                 SharePrefsCodec.style, SharePrefsCodec.palette, SharePrefsCodec.corners, SharePrefsCodec.shape,
                 SharePrefsCodec.fullScreen, SharePrefsCodec.translation, SharePrefsCodec.textFormat,
-                SharePrefsCodec.customBackground, SharePrefsCodec.customContent,
+                SharePrefsCodec.customBackground, SharePrefsCodec.customContent, SharePrefsCodec.serverUrl,
             ).map { it.name },
         )
     }

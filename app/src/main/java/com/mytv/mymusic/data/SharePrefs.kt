@@ -56,6 +56,8 @@ data class SharePrefs(
     /** 每句下面带一行副行（翻译 / 罗马音，和全屏歌词同一份）。 */
     val translation: Boolean = false,
     val textFormat: ShareTextFormat = ShareTextFormat.WithSong,
+    /** 自建分享服务的 origin（`https://…`，本地调试可为 `http://localhost`）；空串表示还没配置。 */
+    val serverUrl: String = "",
     /** 自定义配色的底色、字色（ARGB）；默认就是粗糙卡的荧光绿底黑字。 */
     val customBackground: Int = DEFAULT_CUSTOM_BACKGROUND,
     val customContent: Int = DEFAULT_CUSTOM_CONTENT,
@@ -75,6 +77,7 @@ object SharePrefsCodec {
     val fullScreen = booleanPreferencesKey("share_full")
     val translation = booleanPreferencesKey("share_translation")
     val textFormat = stringPreferencesKey("share_text_format")
+    val serverUrl = stringPreferencesKey("share_server_url")
     val customBackground = intPreferencesKey("share_custom_bg")
     val customContent = intPreferencesKey("share_custom_fg")
 
@@ -89,6 +92,7 @@ object SharePrefsCodec {
             fullScreen = values[fullScreen] ?: defaults.fullScreen,
             translation = values[translation] ?: defaults.translation,
             textFormat = enumOr(values[textFormat], defaults.textFormat),
+            serverUrl = values[serverUrl].orEmpty(),
             customBackground = values[customBackground] ?: defaults.customBackground,
             customContent = values[customContent] ?: defaults.customContent,
         )
@@ -102,6 +106,7 @@ object SharePrefsCodec {
         values[fullScreen] = value.fullScreen
         values[translation] = value.translation
         values[textFormat] = value.textFormat.name
+        values[serverUrl] = value.serverUrl
         values[customBackground] = value.customBackground
         values[customContent] = value.customContent
     }

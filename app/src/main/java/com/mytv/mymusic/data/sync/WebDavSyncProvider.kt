@@ -125,8 +125,12 @@ class WebDavSyncProvider(
         const val ID = "webdav"
         const val FILE_NAME = "mymusic-library.json"
 
-        /** 上传上限是 900 KB；读的时候放宽，别人手动改大了也能读出来再提示。 */
-        private const val MAX_READ_BYTES = 4L * 1024 * 1024
+        /**
+         * 读上限要覆盖设置页允许的最大同步文件（32 MB），再多留一点余量：
+         * 上传放宽到 16 MB 后，下次读若还卡在 4 MB 就等于把文件写上去又读不回来。
+         * WebDavClient.request(maxBytes + 1) 仍会挡住误读超大文件，不会撑爆内存。
+         */
+        private const val MAX_READ_BYTES = 40L * 1024 * 1024
 
         internal fun failureKind(kind: WebDavErrorKind): SyncFailureKind = when (kind) {
             WebDavErrorKind.Unauthorized -> SyncFailureKind.Auth

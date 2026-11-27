@@ -164,6 +164,17 @@ object SyncSizeBudget {
     fun hardLimitFor(providerId: String): Int =
         if (providerId == WebDavSyncProvider.ID) WEBDAV_LIMIT_BYTES else SNIPPET_LIMIT_BYTES
 
+    /**
+     * 上传时的实际拦截值。WebDAV 用用户在同步页选的 MB 数（4–32），
+     * Gist/Gitee 无视该设置、仍固定 900 KB——它们的接口会截断大文件，放宽只会写上去再也读不全。
+     */
+    fun uploadLimitFor(providerId: String, syncSizeLimitMb: Int): Int =
+        if (providerId == WebDavSyncProvider.ID) {
+            syncSizeLimitMb.coerceIn(4, 32) * 1024 * 1024
+        } else {
+            SNIPPET_LIMIT_BYTES
+        }
+
     /** 超过 1 MB 时给同步页的提示；没超返回空串。 */
     fun warning(bytes: Int): String {
         if (bytes <= WARN_BYTES) return ""

@@ -102,6 +102,7 @@ import com.mytv.mymusic.ui.components.ConnectedToggleGroup
 import com.mytv.mymusic.ui.components.IconTone
 import com.mytv.mymusic.ui.components.ListRow
 import com.mytv.mymusic.ui.components.LocalAppWindow
+import com.mytv.mymusic.ui.settings.SettingsNote
 import com.mytv.mymusic.ui.components.LocalOverlayPadding
 import com.mytv.mymusic.ui.components.PageScaffold
 import com.mytv.mymusic.ui.components.SectionLabel
@@ -232,6 +233,26 @@ fun SyncCenterScreen(
                     icon = Icons.Filled.Wifi,
                     summary = "移动网络下先暂存，连上 Wi-Fi 再上传",
                 )
+            }
+        }
+        // 只有 WebDAV 能调：Gist/Gitee 的接口会截断大文件，固定 900 KB 不给用户选。
+        // 入口放在下面的 WebDAV 表单里（报错发生在连接那一步），这里只给已连接用户一个回看位置。
+        if (account?.provider == WebDavSyncProvider.ID) {
+            item(key = "sizeLimitHead", contentType = "header") { SectionLabel("同步文件上限") }
+            item(key = "sizeLimit", contentType = "sizeLimit") {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ConnectedToggleGroup(
+                        options = listOf(4, 8, 16, 32),
+                        selected = sync.syncSizeLimitMb,
+                        onSelect = actions::setSyncSizeLimitMb,
+                        label = { "$it MB" },
+                        modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth(),
+                    )
+                    SettingsNote(
+                        "同步文件超过上限会停止上传。默认 4 MB；歌单多或本地音乐多可调到 8/16/32 MB。" +
+                            "调大后重新同步一次即可，Gist/Gitee 仍固定 900 KB。",
+                    )
+                }
             }
         }
         item(key = "backupHead", contentType = "header") { SectionLabel("备份") }
@@ -915,6 +936,19 @@ fun SyncConnectScreen(
                 firstFocus = tokenFocus,
                 onConnectAttempt = { attempted = true },
             )
+            // 4096 KB 的拦截发生在“连接并同步”这一步，所以上限入口必须在这里，
+            // 不能等连上之后才给——那时用户已经卡在报错里了。
+            Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("同步文件上限", style = MaterialTheme.typography.titleSmall)
+                ConnectedToggleGroup(
+                    options = listOf(4, 8, 16, 32),
+                    selected = sync.syncSizeLimitMb,
+                    onSelect = actions::setSyncSizeLimitMb,
+                    label = { "$it MB" },
+                    modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth(),
+                )
+                SettingsNote("同步内容超过上限会停止上传。歌单或本地音乐多时调到 8/16/32 MB 再重试。")
+            }
             if (window.isTv) {
                 Column(Modifier.padding(top = 8.dp)) {
                     InfoNote("手机扫码可避免在电视上输入密码。")

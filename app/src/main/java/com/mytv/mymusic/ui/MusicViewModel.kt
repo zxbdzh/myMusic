@@ -6863,6 +6863,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { app.sync.setWifiOnly(enabled) }
     }
 
+    /** WebDAV 同步文件上限（MB），设置页可调 4/8/16/32。 */
+    fun setSyncSizeLimitMb(value: Int) {
+        viewModelScope.launch { app.sync.setSyncSizeLimitMb(value) }
+    }
+
     fun disconnectSync() {
         viewModelScope.launch { app.sync.disconnect() }
     }

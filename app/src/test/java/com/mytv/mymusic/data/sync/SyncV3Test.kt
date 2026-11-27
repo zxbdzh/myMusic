@@ -301,4 +301,17 @@ class SyncV3Test {
         assertEquals(900 * 1024, SyncSizeBudget.hardLimitFor("gist"))
         assertEquals(4 * 1024 * 1024, SyncSizeBudget.hardLimitFor(WebDavSyncProvider.ID))
     }
+
+    @Test
+    fun uploadLimitFollowsWebDavSettingButNotGist() {
+        // WebDAV 的上限来自设置页：歌单大了可以调宽，默认仍是 4 MB。
+        assertEquals(4 * 1024 * 1024, SyncSizeBudget.uploadLimitFor(WebDavSyncProvider.ID, 4))
+        assertEquals(16 * 1024 * 1024, SyncSizeBudget.uploadLimitFor(WebDavSyncProvider.ID, 16))
+        assertEquals(32 * 1024 * 1024, SyncSizeBudget.uploadLimitFor(WebDavSyncProvider.ID, 32))
+        // 越界值被夹住，不能靠改设置文件写出无限大的上限。
+        assertEquals(4 * 1024 * 1024, SyncSizeBudget.uploadLimitFor(WebDavSyncProvider.ID, 1))
+        assertEquals(32 * 1024 * 1024, SyncSizeBudget.uploadLimitFor(WebDavSyncProvider.ID, 999))
+        // Gist/Gitee 的接口会截断，用户把 WebDAV 调到多大都不能放宽它们。
+        assertEquals(900 * 1024, SyncSizeBudget.uploadLimitFor("gist", 32))
+    }
 }

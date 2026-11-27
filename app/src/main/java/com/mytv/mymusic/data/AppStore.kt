@@ -310,6 +310,8 @@ class SettingsStore(private val context: Context) {
     private val crossfadeAnimationKey = stringPreferencesKey("crossfade_animation")
     private val crossfadeModeKey = stringPreferencesKey("crossfade_mode")
     private val cacheLimitKey = intPreferencesKey("cache_limit_mb")
+/** WebDAV 同步文件上限（MB），默认 4；用户可在同步页调大。 */
+private val syncSizeLimitKey = intPreferencesKey("sync_size_limit_mb")
     private val lyricsBackgroundKey = stringPreferencesKey("lyrics_background")
     private val notificationLyricsKey = booleanPreferencesKey("notification_lyrics")
     private val floatingLyricsEnabledKey = booleanPreferencesKey("floating_lyrics_enabled")
@@ -458,6 +460,8 @@ class SettingsStore(private val context: Context) {
             crossfadeAnimation = values[crossfadeAnimationKey] ?: CrossfadeAnimation.Ring.name,
             crossfadeMode = values[crossfadeModeKey] ?: CrossfadeMode.Automix.name,
             cacheLimitMb = values[cacheLimitKey] ?: 0,
+            // 同步文件上限夹在 4–32 MB：低于 4 连默认大小都放不下；高于 32 交给导出备份。
+            syncSizeLimitMb = (values[syncSizeLimitKey] ?: 4).coerceIn(4, 32),
             githubMirror = GithubMirror.fromName(values[githubMirrorKey]),
         )
     }
@@ -528,6 +532,9 @@ class SettingsStore(private val context: Context) {
     suspend fun crossfadeMode(value: CrossfadeMode) =
         context.dataStore.edit { it[crossfadeModeKey] = value.name }
     suspend fun cacheLimitMb(value: Int) = context.dataStore.edit { it[cacheLimitKey] = value }
+suspend fun syncSizeLimitMb(value: Int) = context.dataStore.edit {
+    it[syncSizeLimitKey] = value.coerceIn(4, 32)
+}
     suspend fun githubMirror(value: GithubMirror) = context.dataStore.edit { it[githubMirrorKey] = value.name }
 
     /** 墙内设置：在同一次 edit 里读出当前值再写回，连着点两个开关也不会互相覆盖。 */
@@ -928,6 +935,8 @@ data class AppSettings(
     val crossfadeMode: String = "Automix",
     /** 播放缓存上限（MB），0 表示按设备默认：电视 256，其他 512。 */
     val cacheLimitMb: Int = 0,
+    /** WebDAV 同步文件上限（MB）；默认 4，可在同步页调大，Gist/Gitee 仍固定 900 KB。 */
+    val syncSizeLimitMb: Int = 4,
     /** 更新检查与下载用哪条 GitHub 线路。 */
     val githubMirror: GithubMirror = GithubMirror.Auto,
 )

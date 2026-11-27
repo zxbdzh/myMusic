@@ -372,6 +372,7 @@ class MusicActions(private val model: MusicViewModel) {
     fun resolveConflict(id: String, strategy: SyncStrategy) = model.resolveSyncConflict(id, strategy)
     fun setSyncAutoSync(value: Boolean) = model.setSyncAutoSync(value)
     fun setSyncWifiOnly(value: Boolean) = model.setSyncWifiOnly(value)
+    fun setSyncSizeLimitMb(value: Int) = model.setSyncSizeLimitMb(value)
     fun disconnectSync() = model.disconnectSync()
     fun exportLibrary(uri: Uri) = model.exportLibrary(uri)
     fun importLibrary(uri: Uri, strategy: SyncStrategy = SyncStrategy.Merge) = model.importLibrary(uri, strategy)

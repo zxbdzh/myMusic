@@ -96,6 +96,8 @@ data class SyncUiState(
     val webDavCheck: WebDavCheckUi = WebDavCheckUi(),
     /** 上次上传的同步文件超过 1 MB 时的提示（不拦同步，见 [SyncSizeBudget]）；没超为空。 */
     val sizeNotice: String = "",
+    /** WebDAV 同步文件上限（MB），来自设置页；Gist/Gitee 固定 900 KB 不走这里。 */
+    val syncSizeLimitMb: Int = 4,
 )
 
 /**
@@ -192,7 +194,8 @@ class SyncCoordinator(
                 libraryDao.playlists(),
                 libraryDao.entryCounts(),
                 combine(musicDao.songs("favorite"), settings.state) { favorites, current ->
-                    favorites.size to current.cookies.count { cookie -> cookie.value.isNotBlank() }
+                    // 上限跟着设置走：这里一起进 Derived，改一次就同步到 UI 和上传拦截。
+                    Triple(favorites.size, current.cookies.count { cookie -> cookie.value.isNotBlank() }, current.syncSizeLimitMb)
                 },
             ) { accounts, conflicts, playlists, counts, extras ->
                 Derived(
@@ -202,6 +205,7 @@ class SyncCoordinator(
                     trackCount = counts.sumOf { it.total },
                     favoritesCount = extras.first,
                     cookieCount = extras.second,
+                    syncSizeLimitMb = extras.third,
                 )
             }.collect { derived ->
                 _state.update { current ->
@@ -222,6 +226,8 @@ class SyncCoordinator(
                         trackCount = derived.trackCount,
                         favoritesCount = derived.favoritesCount,
                         cookieCount = derived.cookieCount,
+                        // 设置页改了上限后同步页要立刻反映，否则按钮显示的和实际拦截值不一致。
+                        syncSizeLimitMb = derived.syncSizeLimitMb,
                     )
                 }
             }
@@ -238,6 +244,7 @@ class SyncCoordinator(
         val trackCount: Int,
         val favoritesCount: Int,
         val cookieCount: Int,
+        val syncSizeLimitMb: Int,
     )
 
     fun requestSync(manual: Boolean) {
@@ -899,6 +906,9 @@ class SyncCoordinator(
         syncDao.putAccount(account.copy(wifiOnly = enabled, updatedAt = System.currentTimeMillis()))
     }
 
+    /** 设置页调大 WebDAV 上限后立刻生效，UI 由 settings.state → Derived 反向流回。 */
+    suspend fun setSyncSizeLimitMb(value: Int) = settings.syncSizeLimitMb(value)
+
     suspend fun disconnect() {
         pendingInitial = null
         authBlocked = null
@@ -1295,11 +1305,13 @@ class SyncCoordinator(
     private fun encodeForUpload(snapshot: SyncSnapshot, providerId: String): String {
         val content = SyncJson.encode(snapshot.copy(deviceId = deviceId, updatedAt = SyncTime.nowIso()))
         val bytes = content.toByteArray(Charsets.UTF_8).size
-        val limit = SyncSizeBudget.hardLimitFor(providerId)
+        // WebDAV 用设置页选的上限；Gist/Gitee 接口会截断大文件，固定 900 KB 不走这里。
+        // settings.state 是普通 Flow，没有 value；derived 已把设置值带进 _state，直接读它。
+        val limit = SyncSizeBudget.uploadLimitFor(providerId, _state.value.syncSizeLimitMb)
         if (bytes > limit) {
             throw SyncException(
                 SyncFailureKind.Unknown,
-                "同步文件超过 ${limit / 1024} KB，这个同步位置读不全这么大的文件，已停止自动上传。请导出本机备份并整理歌单后再同步。",
+                "同步文件超过 ${limit / 1024} KB，这个同步位置读不全这么大的文件，已停止自动上传。请导出本机备份并整理歌单后再同步，或在同步页调大 WebDAV 上限。",
             )
         }
         // 超过 1 MB 只提示，照常上传：本地歌多了文件指纹和云端位置，体积变大是正常的

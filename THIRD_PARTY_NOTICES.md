@@ -128,6 +128,12 @@ Attribution: the license-exchange envelope, the `data:text/plain;base64,<PSSH>` 
 
 - Not verified on device: whether Apple's Widevine licence server accepts a generic Android device's CDM, and whether the resulting stream decrypts, could not be tested here. What *was* verified with a real signed-in account (2026-11-05): `/v1/me/account?meta=subscription` returns `active: true`; `/v1/play/assets?id=<adamId>&kind=song&includeLicenseUrls=true&hlsEncryption=CBC&hlsProfile=enhancedHls` returns `keyServerUrl` (matching the constant above), a `widevineKeyCertificateUrl` and a `url` pointing at a `…_lossy.m3u8` manifest that is structurally identical to the `enhancedHls` one; and the licence endpoint accepts the session — without a token it answers `failureType: 2002` ("Your session has ended"), with a valid token and a deliberately malformed challenge it answers `errorCode: -42585` / `status: -1021` instead, i.e. it gets past authentication and fails only on the challenge. The final step cannot be exercised here because the x86 emulator cannot instantiate a Widevine CDM at all (`MediaDrm` throws `UnsupportedSchemeException: NO_INIT`), so a physical device is required. The failure mode remains a playback error that falls back to the preview, i.e. no worse than before this was added.
 
+## Temari (Apple FairPlay sample decryption)
+
+- Upstream: https://github.com/SyngUp/Temari
+- License: MIT License
+- Usage: `app/src/main/jniLibs/{arm64-v8a,armeabi-v7a,x86_64}/libtemari.so` are built from Temari 0.3.1 plus a small JNI wrapper (`src/jni.rs` in that build). The Kotlin side (`data/native/TemariNative.kt`) only wraps template creation and per-sample decryption; no other Temari source is bundled. The wrapper adds no decryption logic of its own.
+
 ## YesPlayMusic (lyrics background rhythm)
 
 - Upstream: https://github.com/ijoji42/YesPlayMusic

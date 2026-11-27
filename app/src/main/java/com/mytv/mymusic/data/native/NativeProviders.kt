@@ -12,6 +12,7 @@ object NativeProviders {
         addProvider { KuwoProvider() }
         addProvider { MiguProvider() }
         addProvider { AppleProvider() }
+        addProvider { AppleCardProvider() }
         addProvider { JooxProvider() }
         addProvider { QianqianProvider() }
         addProvider { BilibiliProvider() }

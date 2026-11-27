@@ -38,12 +38,16 @@ internal class ShareAudioPreparer(
     suspend fun prepare(
         url: String,
         extension: String,
+        headers: Map<String, String> = emptyMap(),
         onProgress: (Long, Long) -> Unit = { _, _ -> },
     ): File = runInterruptible(Dispatchers.IO) {
         directory.mkdirs()
         val target = File.createTempFile("share-", ".${extension.ifBlank { "bin" }}", directory)
         try {
-            val request = Request.Builder().url(url).build()
+            // 防盗链的源（例如 B 站 CDN）必须和正常下载带同一套请求头，否则直接 403
+            val request = Request.Builder().url(url).apply {
+                headers.forEach { (name, value) -> header(name, value) }
+            }.build()
             val response = try {
                 http.newCall(request).execute()
             } catch (error: IOException) {

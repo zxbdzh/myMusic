@@ -7187,23 +7187,36 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 取流地址与下载完全一致（含 Subsonic 的鉴权地址）。
+     * 取流地址与下载完全一致（含 Subsonic 的鉴权地址、B 站防盗链请求头）。
      *
-     * shortcut: 地址被 CDN 拒绝时这里不自动重新取流，由用户重试一次；接上失效重取后再补。
+     * CDN 掐断连接或地址失效时，让解析器丢掉这条缓存地址再取一次、重下一次；
+     * 这两种情况在长音频下载里很常见，直接失败会把「这次网络抖动」说成「这首歌不能分享」。
      */
     private suspend fun prepareShareAudio(song: Song, context: Application): File {
-        val url = shareAudioUrl(song)
-        // 后缀只用来给服务端声明 Content-Type，取的是这次真实地址的后缀
-        val extension = listOf(
-            Uri.parse(url).path?.let { File(it).extension }.orEmpty(),
-            song.ext,
-        ).firstOrNull { it.isNotBlank() }?.lowercase() ?: "mp3"
         val directory = File(context.cacheDir, "share").apply { mkdirs() }
-        return com.mytv.mymusic.data.share.ShareAudioPreparer(directory, http).prepare(url, extension)
+        val preparer = com.mytv.mymusic.data.share.ShareAudioPreparer(directory, http)
+        var provider = ""
+        suspend fun attempt(): File {
+            val url = shareAudioUrl(song) { provider = it }
+            // 后缀只用来给服务端声明 Content-Type，取的是这次真实地址的后缀
+            val extension = listOf(
+                Uri.parse(url).path?.let { File(it).extension }.orEmpty(),
+                song.ext,
+            ).firstOrNull { it.isNotBlank() }?.lowercase() ?: "mp3"
+            return preparer.prepare(url, extension, com.mytv.mymusic.data.native.BilibiliCdn.headers(url))
+        }
+        return try {
+            attempt()
+        } catch (error: com.mytv.mymusic.data.share.SharePrepareException) {
+            // 空文件说明地址给的就不是音频，重取也没用；其余情况重新取流再试一次
+            if (error.failure == com.mytv.mymusic.data.share.SharePrepareFailure.Empty) throw error
+            if (provider.isNotBlank()) app.repository.invalidateStreamUrls(provider)
+            attempt()
+        }
     }
 
     /** 分享要用的取流地址：发布时下载它，片段编辑页试听也直接播它（不落盘）。 */
-    suspend fun shareAudioUrl(song: Song): String {
+    suspend fun shareAudioUrl(song: Song, onProvider: (String) -> Unit = {}): String {
         val track = canonicalForSong(song)
         val resolved = resolvePlayable(track, forDownload = true)
         val ready = resolved.resolution as? Resolution.Ready
@@ -7212,6 +7225,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             val reason = runCatching { noSourceMessage(track, resolved.resolution) }.getOrNull()
             error(listOfNotNull("没有可分享的音频地址", reason?.takeIf { it.isNotBlank() }).joinToString("："))
         }
+        onProvider(ready.source.providerId)
         return if (ready.source.providerId.startsWith(com.mytv.mymusic.data.subsonic.SUBSONIC_PROVIDER_PREFIX)) {
             app.repository.downloadUrl(ready.source.song, cookieFor(ready.source.providerId))
         } else {

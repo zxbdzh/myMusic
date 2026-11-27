@@ -97,6 +97,22 @@ class ShareAudioPreparerTest {
     }
 
     @Test
+    fun sendsTheHeadersTheProviderRequires() = runTest {
+        // B 站音频 CDN 不带 Referer 和浏览器 UA 会 403，分享下载必须和正常下载一样带上
+        server.enqueue(MockResponse.Builder().body(okio.Buffer().write(ByteArray(64))).build())
+
+        preparer.prepare(
+            server.url("/audio.m4a").toString(),
+            "m4a",
+            headers = mapOf("Referer" to "https://www.bilibili.com/", "User-Agent" to "ua-test"),
+        )
+
+        val request = server.takeRequest()
+        assertEquals("https://www.bilibili.com/", request.headers["Referer"])
+        assertEquals("ua-test", request.headers["User-Agent"])
+    }
+
+    @Test
     fun truncatedDownloadIsReportedAsIo() = runTest {
         // 服务端声明 4096 字节，实际只发 1024 就断开：不能当成功，也不能把半截文件传上去
         server.enqueue(

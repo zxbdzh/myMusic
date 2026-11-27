@@ -30,5 +30,7 @@
 - 共存包固定输出到 `app/build/outputs/release/`，文件名 `myMusic-<versionName>-coexist.apk`。
 - 打包命令：PowerShell 先 `$env:APP_ID_SUFFIX=".coexist"`，再
   `./gradlew :app:assembleCoexistRelease`；包名固定 `com.mytv.mymusic.coexist`，可与官方包共存。
+- 共存包的 `versionCode` 必须递增（用 `VERSION_CODE` 环境变量传入），否则同包名会报
+  「无法降级安装」；当前已装 coexist 版本是 89，下一次至少用 90。
 - 仓库没有 release keystore 时使用 debug 签名；任务会校验 `APP_ID_SUFFIX`，未设置直接失败。
 - 不要把 `app/build/outputs/apk/release/` 里的普通包改名当作共存包发出去。

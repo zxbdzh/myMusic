@@ -1,0 +1,3 @@
+# Desktop Architecture and Performance Strategy
+
+To achieve native PC performance while maintaining feature parity with the Android mobile codebase, we have decided to adopt a hybrid architecture: Kotlin/Compose Multiplatform for the UI shell (forced to D3D12 GPU rendering), coupled with native C/Rust offloading for critical audio/DSP paths (FFT, mixing, decoding). This includes a complete redesign of the Desktop Shell (40dp header, 200dp sidebar) and strict performance benchmarks (WASAPI, async virtualized scrolling, hardware-accelerated rendering). We will support standard installation, portable modes, and in-app updates based on the `:core` mirroring routes.

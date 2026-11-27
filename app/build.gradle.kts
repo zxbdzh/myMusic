@@ -70,6 +70,11 @@ android {
             } else {
                 signingConfigs.getByName("debug")
             }
+            // 官方包用的是维护者私钥，任何人拿到官方 APK 也签不出同一个证书。
+            // 想保留官方更新又装自编译包，只能换 applicationId 让两个应用共存。
+            System.getenv("APP_ID_SUFFIX")?.takeIf { it.isNotBlank() }?.let {
+                applicationIdSuffix = it
+            }
         }
     }
 

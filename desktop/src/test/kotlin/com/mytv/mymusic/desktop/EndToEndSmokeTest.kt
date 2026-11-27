@@ -21,12 +21,14 @@ import org.junit.Test
  */
 class EndToEndSmokeTest {
 
-    private fun newStore(): DefaultMusicStore =
-        DefaultMusicStore(
-            catalog = CoreMusicCatalog(DesktopPaths()),
+    private fun newStore(): DefaultMusicStore {
+        val tempRoot = java.io.File(System.getProperty("java.io.tmpdir"), "mymusic-smoke-${System.nanoTime()}").apply { mkdirs() }
+        return DefaultMusicStore(
+            catalog = CoreMusicCatalog(DesktopPaths(overrideRoot = tempRoot)),
             // 冒烟测试验证搜索与状态推进链路，不依赖声卡与音频外链带宽
             audioFactory = com.mytv.mymusic.desktop.state.audio.AudioOutputs::simulated,
         )
+    }
 
     /** 轮询等待状态条件，超时返回最后一次读到的值。 */
     private suspend fun awaitState(
@@ -54,14 +56,20 @@ class EndToEndSmokeTest {
             println("[smoke] 平台 ${providers.size} 个：${providers.joinToString { it.id }}")
 
             // 逐平台打一遍，看清是"整条链断了"还是"某些平台不通"——聚合搜索会吞掉单平台失败
-            val catalog = CoreMusicCatalog(DesktopPaths())
-            val perProvider = providers.map { info ->
-                val hits = runCatching { catalog.search(info.id, "晴天", SearchKind.Song) }.getOrElse {
-                    println("[smoke] ${info.id} 抛异常：${it.message}")
-                    emptyList()
+            val probeDir = java.io.File(System.getProperty("java.io.tmpdir"), "mymusic-probe-${System.nanoTime()}").apply { mkdirs() }
+            val catalog = CoreMusicCatalog(DesktopPaths(overrideRoot = probeDir))
+            val perProvider = try {
+                providers.map { info ->
+                    val hits = runCatching { catalog.search(info.id, "晴天", SearchKind.Song) }.getOrElse {
+                        println("[smoke] ${info.id} 抛异常：${it.message}")
+                        emptyList()
+                    }
+                    println("[smoke] ${info.id}: ${hits.size} 条")
+                    info.id to hits
                 }
-                println("[smoke] ${info.id}: ${hits.size} 条")
-                info.id to hits
+            } finally {
+                catalog.close()
+                probeDir.deleteRecursively()
             }
             val working = perProvider.filter { it.second.isNotEmpty() }.toMap()
             println("[smoke] 可用平台：${working.keys}")

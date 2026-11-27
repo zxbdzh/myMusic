@@ -569,7 +569,9 @@ private object ScreenshotRunner {
     }
 
     private fun render(dir: File, shot: Shot) {
-        val liveCatalog = CoreMusicCatalog(DesktopPaths())
+        // 截图使用独立临时数据目录，绝不污染用户真实的 mymusic.db 与凭据库
+        val shotData = File(dir, ".shot-data-${shot.name}").apply { deleteRecursively(); mkdirs() }
+        val liveCatalog = CoreMusicCatalog(DesktopPaths(overrideRoot = shotData))
         val catalog = if (shot.acceptanceFixture == AcceptanceFixture.None) {
             liveCatalog
         } else {

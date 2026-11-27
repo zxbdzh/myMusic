@@ -12,8 +12,19 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.random.Random
 
-/** 播放域状态：队列、进度、当前歌词。和 Android `canonicalQueue` + `position` + `lyrics` 对应。 */
+/** 播放模式：顺序循环 / 单曲循环 / 随机播放。 */
+enum class PlayMode(val label: String) {
+    Sequence("列表循环"),
+    Single("单曲循环"),
+    Shuffle("随机播放"),
+    ;
+
+    fun next(): PlayMode = entries[(ordinal + 1) % entries.size]
+}
+
+/** 播放域状态：队列、进度、播放模式、当前歌词。 */
 @Immutable
 data class PlaybackUi(
     val current: Track? = null,
@@ -24,19 +35,15 @@ data class PlaybackUi(
     val playing: Boolean = false,
     val buffering: Boolean = false,
     val volume: Float = 0.8f,
+    val playMode: PlayMode = PlayMode.Sequence,
     val lyrics: LyricsDoc? = null,
     val lyricsLoading: Boolean = false,
     val error: String = "",
+    val streamNote: String = "",
 )
 
 /**
- * 播放用例：队列 + 与 [AudioOutput] 的交接 + 歌词拉取。
- *
- * 和 Android 的分工对照：
- *  - `QueueStore`（队列持久化）→ 这里只有内存队列，落盘属于 t3 / P2；
- *  - `PlaybackService`（进程内 ExoPlayer）→ [AudioOutput]（桌面是 libVLC 或模拟）；
- *  - `MusicViewModel.play*` 的换源重试 → 骨架期只做一次 `catalog.stream`，
- *    「取流失败换下一个音源」是 t2/t3 的活，接口已经留好（stream 返回 null 就报错）。
+ * 播放用例：队列 + 与 [AudioOutput] 的交接 + 自动切歌 + 历史落库 + 歌词拉取。
  *
  * 所有状态更新都走 `_state.update`，UI 侧只 collect [state]。
  */
@@ -48,11 +55,23 @@ class PlaybackUseCase(
     private val _state = MutableStateFlow(PlaybackUi(volume = audio.snapshot.value.volume))
     val state: StateFlow<PlaybackUi> = _state.asStateFlow()
 
+    @Volatile
+    private var userPaused: Boolean = false
+
+    @Volatile
+    private var lastWasPlaying: Boolean = false
+
     init {
-        // 后端是唯一进度来源：引擎（或模拟器）怎么报，界面就怎么显示，
-        // 不让 UI 自己算时间——否则 seek / 缓冲 / 换曲时会漂
+        // 后端是唯一进度来源：引擎怎么报，界面就怎么显示，避免 seek / 缓冲 / 换曲时漂移
         scope.launch {
             audio.snapshot.collect { snapshot ->
+                val finishedNaturally = lastWasPlaying &&
+                    !snapshot.playing &&
+                    !userPaused &&
+                    snapshot.durationMs > 0L &&
+                    snapshot.positionMs >= snapshot.durationMs - 500L
+                lastWasPlaying = snapshot.playing
+
                 _state.update { current ->
                     current.copy(
                         playing = snapshot.playing,
@@ -63,11 +82,15 @@ class PlaybackUseCase(
                         error = snapshot.error.ifBlank { current.error },
                     )
                 }
+
+                if (finishedNaturally) {
+                    advanceAfterTrackEnded()
+                }
             }
         }
     }
 
-    /** 从一首歌起播；[queue] 为空时只播这一首（搜索结果点播就是这个语义）。 */
+    /** 从一首歌起播；[queue] 为空时只播这一首。 */
     fun play(track: Track, queue: List<Track> = emptyList()) {
         val list = queue.ifEmpty { listOf(track) }
         val index = list.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
@@ -77,6 +100,8 @@ class PlaybackUseCase(
     fun playQueue(tracks: List<Track>, startIndex: Int) {
         if (tracks.isEmpty()) return
         val index = startIndex.coerceIn(tracks.indices)
+        userPaused = false
+        lastWasPlaying = false
         _state.update {
             it.copy(
                 queue = tracks,
@@ -87,6 +112,7 @@ class PlaybackUseCase(
                 lyrics = null,
                 lyricsLoading = true,
                 error = "",
+                streamNote = "",
             )
         }
         startCurrent(autoPlay = true)
@@ -95,14 +121,28 @@ class PlaybackUseCase(
     fun toggle() {
         val current = _state.value
         if (current.current == null) return
-        if (current.playing) audio.pause() else audio.play()
+        if (current.playing) {
+            userPaused = true
+            audio.pause()
+        } else {
+            userPaused = false
+            audio.play()
+        }
+    }
+
+    fun setPlayMode(mode: PlayMode) {
+        _state.update { it.copy(playMode = mode) }
+    }
+
+    fun cyclePlayMode(): PlayMode {
+        val nextMode = _state.value.playMode.next()
+        setPlayMode(nextMode)
+        return nextMode
     }
 
     /**
-     * 右键「下一首播放」：插到当前曲目之后，**不打断**正在播的那首。
-     *
-     * 只改队列与索引，不碰音频后端；已经在队列里的曲目先摘掉再插入，
-     * 避免同一首要放两遍。摘除会让后续索引整体前移，所以插入后要按 id 重新定位当前曲目。
+     * 右键「下一首播放」：插到当前曲目之后，不打断正在播的那首。
+     * 已在队列里的同曲先摘除再插入，避免重复播放。
      */
     fun insertNext(track: Track) {
         val current = _state.value
@@ -122,14 +162,14 @@ class PlaybackUseCase(
     fun next() {
         val current = _state.value
         if (current.queue.isEmpty()) return
-        val index = (current.queueIndex + 1) % current.queue.size
+        val index = pickNextIndex(current.queue.size, current.queueIndex, current.playMode, manual = true)
         playQueue(current.queue, index)
     }
 
     fun previous() {
         val current = _state.value
         if (current.queue.isEmpty()) return
-        // 和绝大多数播放器一致：播过 3 秒先回到本曲开头，再按一次才切上一首
+        // 播过 3 秒先回到本曲开头，再按一次才切上一首
         if (current.positionMs > 3_000L) {
             seekTo(0L)
             return
@@ -151,6 +191,25 @@ class PlaybackUseCase(
 
     fun release() = audio.release()
 
+    private fun advanceAfterTrackEnded() {
+        val current = _state.value
+        if (current.queue.isEmpty()) return
+        val nextIndex = pickNextIndex(current.queue.size, current.queueIndex, current.playMode, manual = false)
+        playQueue(current.queue, nextIndex)
+    }
+
+    private fun pickNextIndex(size: Int, currentIndex: Int, mode: PlayMode, manual: Boolean): Int {
+        if (size <= 1) return 0
+        return when (mode) {
+            PlayMode.Single -> if (manual) (currentIndex + 1) % size else currentIndex.coerceIn(0, size - 1)
+            PlayMode.Sequence -> (currentIndex + 1) % size
+            PlayMode.Shuffle -> {
+                val candidate = Random.nextInt(size - 1)
+                if (candidate >= currentIndex) candidate + 1 else candidate
+            }
+        }
+    }
+
     private fun startCurrent(autoPlay: Boolean) {
         val track = _state.value.current ?: return
         if (!track.playable) {
@@ -170,15 +229,22 @@ class PlaybackUseCase(
                     it.copy(
                         playing = false,
                         lyricsLoading = false,
-                        error = "《${track.title}》取流失败：音源返回空地址",
+                        error = "《${track.title}》取流失败：原平台与自动换源均未返回可播地址",
                     )
                 }
                 return@launch
             }
             audio.load(track, stream)
-            // load 之后 duration 以曲目元数据为准；模拟输出和 libVLC 都会带回来
-            _state.update { it.copy(durationMs = track.durationMs, error = "") }
+            _state.update {
+                it.copy(
+                    durationMs = track.durationMs,
+                    error = "",
+                    streamNote = stream.note,
+                )
+            }
             if (autoPlay) audio.play()
+            // 历史写入共享 Room 库，不阻塞起播
+            launch { runCatching { catalog.recordHistory(track) } }
             loadLyrics(track)
         }
     }

@@ -3,80 +3,55 @@ package com.mytv.mymusic.desktop.state
 import com.mytv.mymusic.core.PlatformPaths
 import com.mytv.mymusic.data.ArtistDetail
 import com.mytv.mymusic.data.MusicRepository
+import com.mytv.mymusic.data.PlaylistEntity
+import com.mytv.mymusic.data.PlaylistEntryEntity
+import com.mytv.mymusic.data.SavedSong
+import com.mytv.mymusic.data.SavedSongTombstone
+import com.mytv.mymusic.data.SettingsStore
 import com.mytv.mymusic.data.Song
 import com.mytv.mymusic.data.SongComment
 import com.mytv.mymusic.data.SongCommentPage
 import com.mytv.mymusic.data.TopList
-import com.mytv.mymusic.data.toAlbumSummary
 import com.mytv.mymusic.data.Playlist as CorePlaylist
 import com.mytv.mymusic.data.ProviderInfo as CoreProviderInfo
 import com.mytv.mymusic.data.native.NativeProviders
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import java.io.File
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import java.util.UUID
 
 /**
- * 平台 Cookie 的最小落地。
- *
- * B2 只要求"能带着登录态取数"，完整的账号管理（扫码、多账号、失效提示）是 B4 的事，
- * 所以这里就是一行一个 `providerId=cookie` 的纯文本文件，放在 `PlatformPaths.dataDir` 下。
- *
- * 为什么不用 DataStore：Preferences 的键值语义对"整串 Cookie"没有好处，
- * 而 `dataDir` 上的文件在打包/自定义目录时行为最可预测，出问题也能直接打开看。
- * Cookie 里有敏感信息，所以文件权限尽量收紧（Windows 上主要靠目录 ACL，这里只做 best-effort）。
- */
-class PlatformCookieStore(private val dataDir: File) {
-
-    private val file: File by lazy { File(dataDir, "platform-cookies.txt") }
-    private val cache: MutableMap<String, String> by lazy { load() }
-
-    fun get(providerId: String): String = cache[providerId].orEmpty()
-
-    fun all(): Map<String, String> = cache.toMap()
-
-    fun put(providerId: String, cookie: String) {
-        if (providerId.isBlank()) return
-        if (cookie.isBlank()) cache.remove(providerId) else cache[providerId] = cookie
-        save()
-    }
-
-    private fun load(): MutableMap<String, String> = runCatching {
-        if (!file.isFile) return@runCatching mutableMapOf()
-        file.readLines(Charsets.UTF_8)
-            .mapNotNull { line ->
-                val index = line.indexOf('=')
-                if (index <= 0) null else line.substring(0, index) to line.substring(index + 1)
-            }
-            .toMap(mutableMapOf())
-    }.getOrElse { mutableMapOf() }
-
-    private fun save() {
-        runCatching {
-            dataDir.mkdirs()
-            file.writeText(cache.entries.joinToString("\n") { "${it.key}=${it.value}" }, Charsets.UTF_8)
-        }
-    }
-}
-
-/**
- * `MusicCatalog` 的真实实现：桥到 `:core` 的 [MusicRepository]（内部是 13 个平台实现）
- * 与 `NativeProviders`。
+ * `MusicCatalog` 的真实实现：桥到 `:core` 的 [MusicRepository]、`NativeProviders`
+ * 以及统一持久化底座 [DesktopStorage]（Room `mymusic.db` + DataStore + Win32 DPAPI）。
  *
  * 三条纪律：
  *  1. **只暴露 UI 需要的形状**：`Song` / `TopList` / `Playlist` 在这里一次性翻译成
  *     [Track] / [ChartSummary] / [PlaylistSummary]，UI 与用例层看不到 :core 的类型；
- *  2. **原始对象留在本类**：取流与歌词需要完整的 `Song`（带 `extra` 里的平台私有字段），
- *     用 `trackId -> Song` 的注册表保留，避免"用 UI 模型反推领域模型"造成的信息丢失；
+ *  2. **原始对象双落点**：内存中保留 `trackId -> Song` 注册表，收藏/历史/歌单写入 Room 时
+ *     同时序列化完整 `Song` JSON，重启后反序列化即可恢复取流与歌词能力；
  *  3. **失败不抛给 UI**：每个平台调用都 runCatching，返回空列表并记录 `lastError`，
- *     页面显示"这个平台暂时没有数据"，而不是整页崩掉。
+ *     取流失败或仅获试听片段时自动走跨平台换源兜底。
  */
 class CoreMusicCatalog(
     paths: PlatformPaths,
     private val repository: MusicRepository = MusicRepository(),
+    val storage: DesktopStorage = DesktopStorage(paths),
 ) : MusicCatalog {
 
-    private val cookies = PlatformCookieStore(paths.dataDir)
+    private val secrets = storage.secrets
+    private val db = storage.database
+    val settingsStore: SettingsStore get() = storage.settings
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val songs = java.util.concurrent.ConcurrentHashMap<String, Song>()
+
+    override fun getCookie(providerId: String): String = secrets.getCookie(providerId)
+
+    override fun setCookie(providerId: String, cookie: String) = secrets.putCookie(providerId, cookie)
+
+    override fun close() = storage.close()
 
     /** 平台列表：Apple / Spotify / MHub 需要平台层登记（B4），桌面这里自然缺席。 */
     override val providers: List<ProviderInfo> = runCatching {
@@ -93,14 +68,14 @@ class CoreMusicCatalog(
 
     override suspend fun charts(providerId: String): ChartsPayload {
         val id = providerId.ifBlank { defaultProviderId }
-        val cookie = cookies.get(id)
+        val cookie = getCookie(id)
         val topLists = guarded("$id 榜单") { repository.topLists(id, cookie) }.orEmpty()
         val hot = guarded("$id 热门单曲") { repository.hotSongs(id, cookie, 24) }.orEmpty()
         val charts = topLists.map { it.toUi(id) }
         // 部分平台不给 hotSongs（接口要登录），退一步用榜首榜单的前几首，首屏不至于空白
         val songs = if (hot.isNotEmpty()) hot else {
             val first = topLists.firstOrNull()
-            first?.let { guarded("$id 榜单曲目") { repository.topListSongs(id, cookies.get(id), it.id) }.orEmpty() } ?: emptyList()
+            first?.let { guarded("$id 榜单曲目") { repository.topListSongs(id, getCookie(id), it.id) }.orEmpty() } ?: emptyList()
         }
         return ChartsPayload(
             charts = charts,
@@ -111,7 +86,7 @@ class CoreMusicCatalog(
 
     override suspend fun playlists(providerId: String): PlaylistsPayload {
         val id = providerId.ifBlank { defaultProviderId }
-        val cookie = cookies.get(id)
+        val cookie = getCookie(id)
         val recommended = guarded("$id 推荐歌单") { repository.recommended(id, cookie) }.orEmpty()
         val categories = guarded("$id 歌单分类") { repository.categories(id, cookie) }.orEmpty()
         val byCategory = categories.take(8).associate { category ->
@@ -135,14 +110,14 @@ class CoreMusicCatalog(
         return when (kind) {
             SearchKind.Song -> searchSongs(providerIds, keyword)
             SearchKind.Album -> providerIds.flatMap { id ->
-                guarded("$id 专辑搜索") { repository.searchAlbums(id, cookies.get(id), keyword) }
+                guarded("$id 专辑搜索") { repository.searchAlbums(id, getCookie(id), keyword) }
                     .orEmpty()
                     // 专辑/歌单在结果列表里先当「一行」展示，点开走详情（B2 不做详情）
                     .map { it.toUi(id).toTrackRow(id) }
             }.distinctBy { it.title + it.artist }
 
             SearchKind.Playlist -> providerIds.flatMap { id ->
-                guarded("$id 歌单搜索") { repository.searchPlaylists(id, cookies.get(id), keyword) }
+                guarded("$id 歌单搜索") { repository.searchPlaylists(id, getCookie(id), keyword) }
                     .orEmpty()
                     .map { it.toUi(id).toTrackRow(id) }
             }.distinctBy { it.title + it.artist }
@@ -160,7 +135,7 @@ class CoreMusicCatalog(
         kotlinx.coroutines.coroutineScope {
             val results = providerIds.map { id ->
                 async(Dispatchers.IO) {
-                    id to guarded("$id 搜索") { repository.searchSongs(id, cookies.get(id), keyword) }.orEmpty()
+                    id to guarded("$id 搜索") { repository.searchSongs(id, getCookie(id), keyword) }.orEmpty()
                 }
             }.map { it.await() }
             results
@@ -171,14 +146,17 @@ class CoreMusicCatalog(
 
     override suspend fun chartTracks(chart: ChartSummary): List<Track> {
         val id = chart.sourceId.ifBlank { defaultProviderId }
-        return guarded("榜单曲目") { repository.topListSongs(id, cookies.get(id), chart.id) }
+        return guarded("榜单曲目") { repository.topListSongs(id, getCookie(id), chart.id) }
             .orEmpty()
             .map { it.toUi(id) }
     }
 
     override suspend fun playlistTracks(playlist: PlaylistSummary): List<Track> {
+        if (playlist.sourceId == LOCAL_PLAYLIST_SOURCE) {
+            return userPlaylistTracks(playlist.id)
+        }
         val id = playlist.sourceId.ifBlank { defaultProviderId }
-        return guarded("歌单曲目") { repository.playlistSongs(id, cookies.get(id), playlist.id) }
+        return guarded("歌单曲目") { repository.playlistSongs(id, getCookie(id), playlist.id) }
             .orEmpty()
             .map { it.toUi(id) }
     }
@@ -189,14 +167,14 @@ class CoreMusicCatalog(
         val id = providerId.ifBlank { defaultProviderId }
         if (keyword.isBlank()) return emptyList()
         // 歌手搜索走单平台接口：聚合层没有歌手维度，跨平台拼结果反而会把同名歌手混在一列
-        return guarded("$id 歌手搜索") { repository.searchArtists(id, cookies.get(id), keyword) }
+        return guarded("$id 歌手搜索") { repository.searchArtists(id, getCookie(id), keyword) }
             .orEmpty()
             .map { it.toArtistUi(id) }
     }
 
     override suspend fun artistDetail(providerId: String, artistId: String): ArtistPayload? {
         val id = providerId.ifBlank { defaultProviderId }
-        val cookie = cookies.get(id)
+        val cookie = getCookie(id)
         val detail = guarded("$id 歌手详情") { repository.artistDetail(id, cookie, artistId) }
             ?: return null
         // 专辑第一页：和热歌互不依赖，单独取（热歌已在 detail 里带回）
@@ -206,7 +184,7 @@ class CoreMusicCatalog(
 
     override suspend fun albumDetail(providerId: String, albumId: String): AlbumPayload? {
         val id = providerId.ifBlank { defaultProviderId }
-        val detail = guarded("$id 专辑详情") { repository.albumDetail(id, cookies.get(id), albumId) }
+        val detail = guarded("$id 专辑详情") { repository.albumDetail(id, getCookie(id), albumId) }
             ?: return null
         return AlbumPayload(
             album = detail.album.toUi(id),
@@ -221,7 +199,7 @@ class CoreMusicCatalog(
         val song = songs[track.id] ?: return null
         val result = guarded("$id 评论") {
             // :core 的 comments 按 song.source 找 provider，签名 (song, cookie, page, limit)，没有 provider 参数
-            repository.comments(song, cookies.get(id), page.coerceAtLeast(1), 20)
+            repository.comments(song, getCookie(id), page.coerceAtLeast(1), 20)
         } ?: return null
         return result.toUi()
     }
@@ -234,7 +212,7 @@ class CoreMusicCatalog(
 
     override suspend fun parseLink(providerId: String, link: String): ParsedLink? {
         val id = providerId.ifBlank { defaultProviderId }
-        val cookie = cookies.get(id)
+        val cookie = getCookie(id)
         val text = link.trim()
         if (text.isBlank()) return null
         // 先按歌单解析，失败再按专辑，最后按单曲：三条路径互斥，串行尝试成本最低
@@ -268,42 +246,275 @@ class CoreMusicCatalog(
         )
     }
 
-    override suspend fun library(): LibraryPayload {
-        // 收藏 / 历史还没有本地库（Room 在 t2b），先用最近一次会话里点过的歌撑起"我的"页，
-        // 收藏走内存 + 文件；等本地库落地后换实现，页面不用改
-        val recent = songs.values.toList().takeLast(20).map { it.toUi(it.source.ifBlank { defaultProviderId }) }
-        return LibraryPayload(
-            favorites = favorites.map { it.toUi(it.source.ifBlank { defaultProviderId }) },
-            history = recent,
-            playlists = emptyList(),
-            stats = LibraryStats(favorites = favorites.size, history = recent.size, playlists = 0, localTracks = 0),
+    override suspend fun library(): LibraryPayload = withContext(Dispatchers.IO) {
+        val favRows = runCatching { db.dao().songsOnce(FAVORITE_BUCKET) }.getOrDefault(emptyList())
+        val histRows = runCatching { db.dao().songsOnce(HISTORY_BUCKET) }.getOrDefault(emptyList())
+        val playlistEntities = runCatching { db.library().playlistsOnce() }.getOrDefault(emptyList())
+        val localCount = runCatching { db.localTracks().all().count { !it.missing } }.getOrDefault(0)
+
+        val favTracks = favRows.mapNotNull { decodeSong(it.payload)?.toUi(defaultProviderId) }
+        val histTracks = histRows.take(100).mapNotNull { decodeSong(it.payload)?.toUi(defaultProviderId) }
+        val userPlaylists = playlistEntities.map { entity ->
+            val entries = runCatching { db.library().entriesOnce(entity.id) }.getOrDefault(emptyList())
+            val firstCover = entity.linkCover.ifBlank {
+                entries.firstOrNull()?.let { decodeSong(it.payload)?.cover }.orEmpty()
+            }
+            PlaylistSummary(
+                id = entity.id,
+                name = entity.name,
+                curator = if (entity.bound) "已绑定平台歌单" else "自建歌单",
+                trackCount = entries.size,
+                coverUrl = firstCover,
+                sourceId = LOCAL_PLAYLIST_SOURCE,
+            )
+        }
+        LibraryPayload(
+            favorites = favTracks,
+            history = histTracks,
+            playlists = userPlaylists,
+            stats = LibraryStats(
+                favorites = favTracks.size,
+                history = histTracks.size,
+                playlists = userPlaylists.size,
+                localTracks = localCount,
+            ),
         )
     }
 
-    private val favorites = mutableListOf<Song>()
+    /** 切换收藏并落入 Room `saved_songs`（带墓碑以兼容 Android 三方同步）。 */
+    override suspend fun toggleFavoritePersisted(track: Track): Boolean = withContext(Dispatchers.IO) {
+        val song = resolveSong(track)
+        val existing = db.dao().songsOnce(FAVORITE_BUCKET).any { it.key == song.key }
+        val now = System.currentTimeMillis()
+        if (existing) {
+            db.dao().remove(FAVORITE_BUCKET, song.key)
+            db.dao().saveTombstone(SavedSongTombstone(song.key, FAVORITE_BUCKET, now))
+            false
+        } else {
+            db.dao().clearTombstone(FAVORITE_BUCKET, song.key)
+            db.dao().save(SavedSong(song.key, FAVORITE_BUCKET, encodeSong(song), now))
+            true
+        }
+    }
 
-    /** 收藏写进内存表；`library()` 读同一份，所以「我的」页能看到刚收藏的歌。 */
     override fun toggleFavorite(track: Track) {
-        val song = songs[track.id] ?: return
-        val removed = favorites.removeAll { it.id == song.id && it.source == song.source }
-        if (!removed) favorites += song
+        runBlocking(Dispatchers.IO) { toggleFavoritePersisted(track) }
+    }
+
+    /** 记录最近播放到 Room `saved_songs(bucket = "history")`，重开不丢。 */
+    override suspend fun recordHistory(track: Track) = withContext(Dispatchers.IO) {
+        val song = resolveSong(track)
+        runCatching {
+            db.dao().save(SavedSong(song.key, HISTORY_BUCKET, encodeSong(song), System.currentTimeMillis()))
+        }
+        Unit
+    }
+
+    // ---- 自建歌单 CRUD（Room `playlists` + `playlist_entries`） ----
+
+    override suspend fun createUserPlaylist(name: String): PlaylistSummary? = withContext(Dispatchers.IO) {
+        val trimmed = name.trim().ifBlank { return@withContext null }
+        val now = System.currentTimeMillis()
+        val id = UUID.randomUUID().toString()
+        val entity = PlaylistEntity(
+            id = id,
+            name = trimmed,
+            createdAt = now,
+            updatedAt = now,
+            dirty = true,
+        )
+        runCatching { db.library().putPlaylist(entity) }.getOrNull() ?: return@withContext null
+        PlaylistSummary(
+            id = id,
+            name = trimmed,
+            curator = "自建歌单",
+            trackCount = 0,
+            coverUrl = "",
+            sourceId = LOCAL_PLAYLIST_SOURCE,
+        )
+    }
+
+    override suspend fun renameUserPlaylist(playlistId: String, newName: String): Boolean = withContext(Dispatchers.IO) {
+        val trimmed = newName.trim()
+        if (playlistId.isBlank() || trimmed.isBlank()) return@withContext false
+        runCatching {
+            db.library().renamePlaylist(playlistId, trimmed, System.currentTimeMillis())
+            true
+        }.getOrDefault(false)
+    }
+
+    override suspend fun deleteUserPlaylist(playlistId: String): Boolean = withContext(Dispatchers.IO) {
+        if (playlistId.isBlank()) return@withContext false
+        // 走软删除保留 deleted_at + dirty 标记，保证和 Android 同步时能正确传播删除
+        runCatching {
+            db.library().softDelete(playlistId, System.currentTimeMillis())
+            true
+        }.getOrDefault(false)
+    }
+
+    override suspend fun addTrackToPlaylist(playlistId: String, track: Track): Boolean = withContext(Dispatchers.IO) {
+        if (playlistId.isBlank()) return@withContext false
+        val song = resolveSong(track)
+        runCatching {
+            val current = db.library().entriesOnce(playlistId)
+            // 已存在同曲目时不重复追加，保持歌单整洁
+            if (current.any { it.songKey == song.key }) return@runCatching true
+            val updated = current + PlaylistEntryEntity(
+                playlistId = playlistId,
+                position = current.size,
+                songKey = song.key,
+                payload = encodeSong(song),
+            )
+            db.library().replaceEntries(playlistId, updated)
+            db.library().markDirty(playlistId, System.currentTimeMillis())
+            true
+        }.getOrDefault(false)
+    }
+
+    override suspend fun removeTrackFromPlaylist(playlistId: String, trackId: String): Boolean = withContext(Dispatchers.IO) {
+        if (playlistId.isBlank() || trackId.isBlank()) return@withContext false
+        runCatching {
+            val current = db.library().entriesOnce(playlistId)
+            val remaining = current
+                .filterNot { it.songKey == trackId }
+                .mapIndexed { idx, entry -> entry.copy(position = idx) }
+            if (remaining.size == current.size) return@runCatching false
+            db.library().replaceEntries(playlistId, remaining)
+            db.library().markDirty(playlistId, System.currentTimeMillis())
+            true
+        }.getOrDefault(false)
+    }
+
+    override suspend fun userPlaylistTracks(playlistId: String): List<Track> = withContext(Dispatchers.IO) {
+        if (playlistId.isBlank()) return@withContext emptyList()
+        runCatching {
+            db.library().entriesOnce(playlistId)
+                .mapNotNull { entry -> decodeSong(entry.payload)?.toUi(defaultProviderId) }
+        }.getOrDefault(emptyList())
     }
 
     override suspend fun lyrics(track: Track): String {
-        val song = songs[track.id] ?: return ""
-        return guarded("歌词") { repository.lyrics(song, cookies.get(song.source)) }.orEmpty()
+        val song = resolveSong(track)
+        return guarded("歌词") { repository.lyrics(song, getCookie(song.source)) }.orEmpty()
     }
 
+    /**
+     * 取可播放流（带自动跨平台换源兜底）：
+     * 1. 先向原平台请求 `playableStream`（保留真实音质、是否试听及附加信息）；
+     * 2. 若原平台取流为空、失败或仅给 30s 试听片段，则在备选可用平台并发搜索同名同歌手曲目并取流；
+     * 3. 备选全部无完整流但原平台有试听流时，退回试听流并注明。
+     */
     override suspend fun stream(track: Track): AudioStream? {
-        val song = songs[track.id] ?: return null
-        val url = guarded("取流") { repository.downloadUrl(song, cookies.get(song.source)) }.orEmpty()
-        if (url.isBlank()) return null
+        val song = resolveSong(track)
+        val primary = resolveDirectStream(song)
+        if (primary != null && !primary.preview) {
+            return primary.toAudioStream(song, switched = false)
+        }
+        // 原平台失败或仅返回试听片段：尝试跨平台自动换源
+        val fallback = resolveFallbackStream(track, excludeProvider = song.source)
+        if (fallback != null) return fallback
+        return primary?.toAudioStream(song, switched = false)
+    }
+
+    private suspend fun resolveDirectStream(song: Song): com.mytv.mymusic.data.native.PlayableStream? {
+        if (song.source.isBlank() || song.id.isBlank()) return null
+        val cookie = getCookie(song.source)
+        val playable = guarded("${song.source} 取流") {
+            repository.playableStream(song, cookie, storage.paths.cacheDir)
+        }
+        if (playable != null && playable.url.isNotBlank()) return playable
+        val url = guarded("${song.source} 直链") { repository.downloadUrl(song, cookie) }.orEmpty()
+        return if (url.isNotBlank()) com.mytv.mymusic.data.native.PlayableStream(url = url, ext = song.ext) else null
+    }
+
+    private suspend fun resolveFallbackStream(track: Track, excludeProvider: String): AudioStream? =
+        kotlinx.coroutines.coroutineScope {
+            val query = listOf(track.title, track.artist).filter { it.isNotBlank() }.joinToString(" ").trim()
+            if (query.isBlank()) return@coroutineScope null
+            val fallbackProviders = FALLBACK_PROVIDER_ORDER
+                .filter { id -> id != excludeProvider && providers.any { it.id == id && it.searchable } }
+            val candidates = fallbackProviders.map { pid ->
+                async(Dispatchers.IO) {
+                    val found = guarded("$pid 换源搜索") { repository.searchSongs(pid, getCookie(pid), query) }.orEmpty()
+                    pickBestMatch(track, found)
+                }
+            }.mapNotNull { it.await() }
+
+            for (candidate in candidates) {
+                val stream = resolveDirectStream(candidate)
+                if (stream != null && !stream.preview) {
+                    remember(candidate)
+                    return@coroutineScope stream.toAudioStream(candidate, switched = true)
+                }
+            }
+            null
+        }
+
+    private fun pickBestMatch(target: Track, candidates: List<Song>): Song? {
+        if (candidates.isEmpty()) return null
+        val wantTitle = normalizeTitle(target.title)
+        val wantArtist = normalizeTitle(target.artist)
+        return candidates.maxByOrNull { song ->
+            var score = 0
+            val title = normalizeTitle(song.name)
+            val artist = normalizeTitle(song.artist)
+            if (title == wantTitle) score += 60
+            else if (title.contains(wantTitle) || wantTitle.contains(title)) score += 30
+            if (wantArtist.isNotBlank() && (artist.contains(wantArtist) || wantArtist.contains(artist))) score += 30
+            if (!song.isVip) score += 10
+            if (target.durationMs > 0L && song.duration > 0) {
+                val diffSec = kotlin.math.abs(target.durationMs / 1000L - song.duration)
+                if (diffSec <= 5L) score += 10
+            }
+            score
+        }
+    }
+
+    private fun normalizeTitle(raw: String): String =
+        raw.lowercase().replace(Regex("[\\s\\p{Punct}（）【】《》·]"), "")
+
+    private fun com.mytv.mymusic.data.native.PlayableStream.toAudioStream(
+        song: Song,
+        switched: Boolean,
+    ): AudioStream {
+        val headers = buildMap {
+            extra["referer"]?.takeIf { it.isNotBlank() }?.let { put("Referer", it) }
+            extra["user_agent"]?.takeIf { it.isNotBlank() }?.let { put("User-Agent", it) }
+        }
+        val sourceName = providerNameOf(song.source)
+        val note = buildString {
+            if (switched) append("已自动换源至 ").append(sourceName) else append("来源：").append(sourceName)
+            if (level.isNotBlank()) append(" · ").append(level)
+            if (preview) append(" · 试听片段")
+        }
         return AudioStream(
             url = url,
-            // 平台多半会带 ext；没带就从 URL 路径猜一个，libVLC 其实不需要它，只用于界面提示
-            ext = song.ext.ifBlank { extensionOf(url) },
-            note = if (song.source.isBlank()) "" else "来源：${song.source}",
+            ext = ext.ifBlank { song.ext.ifBlank { extensionOf(url) } },
+            headers = headers,
+            note = note,
         )
+    }
+
+    private fun encodeSong(song: Song): String = json.encodeToString(song)
+
+    private fun decodeSong(payload: String): Song? =
+        runCatching { json.decodeFromString<Song>(payload) }.getOrNull()?.also { remember(it) }
+
+    /** 从内存注册表拿原始 Song；若重启后未命中则按 UI Track 构造最小 Song 以便落库。 */
+    private fun resolveSong(track: Track): Song {
+        songs[track.id]?.let { return it }
+        val rawId = track.id.substringAfter(':', track.id)
+        val reconstructed = Song(
+            id = rawId,
+            name = track.title,
+            artist = track.artist,
+            album = track.album,
+            duration = (track.durationMs / 1000L).toInt().coerceAtLeast(0),
+            source = track.providerId,
+            cover = track.coverUrl,
+        )
+        songs[track.id] = reconstructed
+        return reconstructed
     }
 
     private fun extensionOf(url: String): String =
@@ -312,6 +523,15 @@ class CoreMusicCatalog(
             ?.substringAfterLast('.', "")
             ?.take(5)
             .orEmpty()
+
+    companion object {
+        const val FAVORITE_BUCKET = "favorite"
+        const val HISTORY_BUCKET = "history"
+        const val LOCAL_PLAYLIST_SOURCE = "local_playlist"
+
+        /** 跨平台自动换源优先级：优先当前实测可用率高且免登录可取流的平台。 */
+        private val FALLBACK_PROVIDER_ORDER = listOf("qq", "kuwo", "migu", "kugou", "bilibili", "netease")
+    }
 
     /** 记住这次见过的原始 Song：取流 / 歌词 / 收藏都要完整对象。 */
     private fun remember(song: Song): String {

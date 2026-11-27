@@ -317,10 +317,18 @@ data class ContextAction(
 @Composable
 fun trackMenuActions(state: MusicUiState, store: MusicStore, track: Track): List<ContextAction> {
     val liked = track.id in state.favorites
+    val targetPlaylist = state.library.playlists.firstOrNull()
+    val addPlaylistLabel = if (targetPlaylist != null) "加入「${targetPlaylist.name}」" else "加入自建歌单"
     return listOf(
         ContextAction("播放") { store.playTrack(track, state.queue.ifEmpty { listOf(track) }) },
         ContextAction("下一首播放") { store.playNext(track) },
-        ContextAction("加入歌单", enabled = false) { /* t2b：本地歌单库接线后启用 */ },
+        ContextAction(addPlaylistLabel) {
+            if (targetPlaylist != null) {
+                store.addTrackToPlaylist(targetPlaylist.id, track)
+            } else {
+                store.addTrackToDefaultPlaylist(track)
+            }
+        },
         ContextAction("查看歌手") {
             store.navigate(Route.Search)
             store.updateQuery(track.artist)

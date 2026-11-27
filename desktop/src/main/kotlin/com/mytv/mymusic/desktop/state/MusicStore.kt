@@ -1,6 +1,7 @@
 package com.mytv.mymusic.desktop.state
 
 import androidx.compose.runtime.Immutable
+import com.mytv.mymusic.desktop.state.usecase.PlayMode
 import com.mytv.mymusic.desktop.theme.Appearance
 import com.mytv.mymusic.playback.core.CrossfadeControl
 import com.mytv.mymusic.playback.core.EqualizerControl
@@ -78,6 +79,8 @@ data class MusicUiState(
     val playing: Boolean = false,
     val buffering: Boolean = false,
     val volume: Float = 0.8f,
+    val playMode: PlayMode = PlayMode.Sequence,
+    val streamNote: String = "",
     val playerOpen: Boolean = false,
     val lyricsOpen: Boolean = false,
     val posterOpen: Boolean = false,
@@ -156,10 +159,24 @@ interface MusicStore {
     fun previous()
     fun seekTo(positionMs: Long)
     fun setVolume(volume: Float)
+    fun setPlayMode(mode: PlayMode) = Unit
+    fun cyclePlayMode() = Unit
     fun toggleFavorite(track: Track)
 
-    /** 重新拉「我的」页数据（收藏/历史）；进入「我的」时会自动调，播放与收藏后也用它刷新。 */
+    /** 重新拉「我的」页数据（收藏/历史/自建歌单）；进入「我的」时会自动调，操作后也用它刷新。 */
     fun refreshLibrary()
+
+    // ---- 自建歌单 CRUD（Room 持久化） ----
+    fun createUserPlaylist(name: String) = Unit
+    fun renameUserPlaylist(playlistId: String, newName: String) = Unit
+    fun deleteUserPlaylist(playlistId: String) = Unit
+    fun addTrackToPlaylist(playlistId: String, track: Track) = Unit
+    fun addTrackToDefaultPlaylist(track: Track) = Unit
+    fun removeTrackFromPlaylist(playlistId: String, trackId: String) = Unit
+
+    // ---- 平台凭据（DPAPI 加密落盘） ----
+    fun getProviderCookie(providerId: String): String = ""
+    fun setProviderCookie(providerId: String, cookie: String) = Unit
 
     // ---- 覆盖层 ----
     fun openPlayer()

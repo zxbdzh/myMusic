@@ -58,10 +58,42 @@ interface MusicCatalog {
     suspend fun library(): LibraryPayload
 
     /**
-     * 切换收藏。默认空实现（demo/只读数据源不落库），真实实现在 CoreMusicCatalog 里写内存表，
-     * 等 t2b 的 Room 接线后换成落库。UI 的收藏态仍由 store 的 favorites 集合即时反映。
+     * 切换收藏并落库（返回切换后的收藏状态：true=已收藏，false=已取消）。
+     * 默认实现保持向后兼容（Demo / 只读数据源不落库）。
      */
+    suspend fun toggleFavoritePersisted(track: Track): Boolean {
+        toggleFavorite(track)
+        return true
+    }
+
+    /** 兼容早期同步调用点；真实实现优先走 [toggleFavoritePersisted]。 */
     fun toggleFavorite(track: Track) = Unit
+
+    /** 记录播放历史到共享曲库（重开后「最近播放」不丢失）。 */
+    suspend fun recordHistory(track: Track) = Unit
+
+    // ---- 自建歌单 CRUD（与 Android 共用 Room playlists / playlist_entries 表） ----
+
+    suspend fun createUserPlaylist(name: String): PlaylistSummary? = null
+
+    suspend fun renameUserPlaylist(playlistId: String, newName: String): Boolean = false
+
+    suspend fun deleteUserPlaylist(playlistId: String): Boolean = false
+
+    suspend fun addTrackToPlaylist(playlistId: String, track: Track): Boolean = false
+
+    suspend fun removeTrackFromPlaylist(playlistId: String, trackId: String): Boolean = false
+
+    suspend fun userPlaylistTracks(playlistId: String): List<Track> = emptyList()
+
+    // ---- 平台凭据（DPAPI 加密落盘） ----
+
+    fun getCookie(providerId: String): String = ""
+
+    fun setCookie(providerId: String, cookie: String) = Unit
+
+    /** 释放 Room 数据库与持久化协程等资源；退出时调用。 */
+    fun close() = Unit
 
     /** 返回原始 LRC / 纯文本；解析交给 `LyricsParser`，这样解析逻辑可以单测、也能搬去 :core。 */
     suspend fun lyrics(track: Track): String

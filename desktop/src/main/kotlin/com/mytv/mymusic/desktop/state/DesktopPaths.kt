@@ -6,41 +6,69 @@ import java.io.File
 /**
  * 桌面版的目录布局（`PlatformPaths` 的 JVM 实现）。
  *
- * 选 %APPDATA% 而不是 exe 同级目录：jpackage 装到 Program Files 时那里不可写，
- * 而用户数据（Cookie、缓存、导出）本来就该跟着用户走。
+ * 两种模式（落实 Q10）：
+ * 1. **绿色便携模式**：程序所在目录或当前工作目录存在 `portable` / `portable.flag` 时，
+ *    数据、缓存、日志全部落在同级 `data/` 下，不写入 `%APPDATA%`；
+ * 2. **标准安装模式**：数据与日志落 `%APPDATA%\myMusic`，缓存落 `%LOCALAPPDATA%\myMusic\cache`，
+ *    用户导出/下载落 `%USERPROFILE%\Music\myMusic`（避免写入只读的 Program Files）。
  *
- * | 用途 | 位置 |
- * | --- | --- |
- * | 长期数据（Cookie、音源脚本、库） | `%APPDATA%\myMusic` |
- * | 缓存（封面、解析出的临时流） | `%LOCALAPPDATA%\myMusic\cache` |
- * | 日志与崩溃报告 | `%APPDATA%\myMusic\logs` |
- * | 用户可见输出（导出歌单、下载） | `%USERPROFILE%\Music\myMusic` |
- *
- * 为什么不用 `win/WindowsPlatformPaths`：那一个是 t5 的 Windows 集成自带实现，
- * 而 UI 层在非 Windows 上也要能起来（开发机、CI），这里给一个跨平台的最小实现，
- * 两者接口相同，t5 那边换成自己的实现即可。
+ * 单测可通过 [overrideRoot] 注入临时目录，实现完全隔离的 Room / DataStore / DPAPI 测试。
  */
-class DesktopPaths : PlatformPaths {
+class DesktopPaths(
+    overrideRoot: File? = null,
+) : PlatformPaths {
 
-    private val roaming: File = File(
-        System.getenv("APPDATA")?.takeIf { it.isNotBlank() } ?: System.getProperty("user.home"),
-        "myMusic",
-    )
+    val isPortable: Boolean
 
-    private val localBase: File = File(
-        System.getenv("LOCALAPPDATA")?.takeIf { it.isNotBlank() } ?: System.getProperty("user.home"),
-        "myMusic",
-    )
-
-    override val dataDir: File = roaming
-    override val cacheDir: File = File(localBase, "cache")
-    override val logDir: File = File(roaming, "logs")
-    override val outputDir: File = File(System.getProperty("user.home"), "Music/myMusic")
+    override val dataDir: File
+    override val cacheDir: File
+    override val logDir: File
+    override val outputDir: File
 
     init {
-        // 目录按需创建：不建的话第一次写 Cookie 会因为没有父目录失败
+        val portableRoot = overrideRoot ?: detectPortableRoot()
+        if (portableRoot != null) {
+            isPortable = true
+            val base = File(portableRoot, "data")
+            dataDir = base
+            cacheDir = File(base, "cache")
+            logDir = File(base, "logs")
+            outputDir = File(base, "music")
+        } else {
+            isPortable = false
+            val roaming = File(
+                System.getenv("APPDATA")?.takeIf { it.isNotBlank() } ?: System.getProperty("user.home"),
+                "myMusic",
+            )
+            val localBase = File(
+                System.getenv("LOCALAPPDATA")?.takeIf { it.isNotBlank() } ?: System.getProperty("user.home"),
+                "myMusic",
+            )
+            dataDir = roaming
+            cacheDir = File(localBase, "cache")
+            logDir = File(roaming, "logs")
+            outputDir = File(System.getProperty("user.home"), "Music/myMusic")
+        }
         listOf(dataDir, cacheDir, logDir).forEach { dir ->
             runCatching { dir.mkdirs() }
+        }
+    }
+
+    companion object {
+        private val PORTABLE_MARKERS = listOf("portable", "portable.flag")
+
+        /** 检查程序目录或工作目录是否存在便携标记文件。 */
+        fun detectPortableRoot(): File? {
+            val candidates = buildList {
+                System.getProperty("compose.application.resources.dir")
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { File(it).parentFile }
+                    ?.let(::add)
+                add(File(System.getProperty("user.dir")))
+            }
+            return candidates.firstOrNull { dir ->
+                dir.isDirectory && PORTABLE_MARKERS.any { File(dir, it).exists() }
+            }
         }
     }
 }

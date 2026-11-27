@@ -1,17 +1,24 @@
 package com.mytv.mymusic.desktop.state
 
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import com.mytv.mymusic.desktop.state.audio.AudioOutput
 import com.mytv.mymusic.desktop.state.audio.AudioOutputs
 import com.mytv.mymusic.desktop.state.usecase.ChartsUseCase
 import com.mytv.mymusic.desktop.state.usecase.LibraryUseCase
+import com.mytv.mymusic.desktop.state.usecase.PlayMode
 import com.mytv.mymusic.desktop.state.usecase.PlaybackUseCase
 import com.mytv.mymusic.desktop.state.usecase.PlaylistsUseCase
 import com.mytv.mymusic.desktop.state.usecase.SearchUseCase
 import com.mytv.mymusic.desktop.state.usecase.readable
 import com.mytv.mymusic.desktop.theme.Appearance
+import com.mytv.mymusic.desktop.theme.BrandSeed
+import com.mytv.mymusic.desktop.theme.PaletteKind
+import com.mytv.mymusic.desktop.theme.ThemeMode
 import com.mytv.mymusic.playback.core.CrossfadeControl
 import com.mytv.mymusic.playback.core.EqualizerControl
 import com.mytv.mymusic.playback.core.SleepTimer
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -83,15 +90,44 @@ class DefaultMusicStore(
                         playing = playing.playing,
                         buffering = playing.buffering,
                         volume = playing.volume,
+                        playMode = playing.playMode,
+                        streamNote = playing.streamNote,
                         lyrics = playing.lyrics,
                         lyricsLoading = playing.lyricsLoading,
-                        // 播放域的错误单独带出来，但不要冲掉页面自己的错误提示
+                        // 播放域的错误或换源提示带出来，但不要冲掉页面自己的错误提示
                         notice = playing.error.ifBlank { it.notice },
                     )
                 }
             }
         }
+        scope.launch { restoreSettings() }
         scope.launch { bootstrap() }
+    }
+
+    /** 启动时从 `:core` SettingsStore 恢复持久化的外观与搜索历史（与 Android 共用一份设置键）。 */
+    private suspend fun restoreSettings() {
+        val coreCatalog = catalog as? CoreMusicCatalog ?: return
+        val saved = runCatching { coreCatalog.settingsStore.state.first() }.getOrNull() ?: return
+        val mode = when (saved.theme.lowercase()) {
+            "dark" -> ThemeMode.Dark
+            "light" -> ThemeMode.Light
+            else -> ThemeMode.System
+        }
+        val palette = PaletteKind.entries.firstOrNull { it.name.equals(saved.browseStyle, ignoreCase = true) }
+            ?: PaletteKind.TonalSpot
+        val seed = if (saved.customSeed != 0) Color(saved.customSeed) else BrandSeed
+        _state.update {
+            it.copy(
+                appearance = Appearance(
+                    mode = mode,
+                    palette = palette,
+                    seed = seed,
+                    amoled = saved.amoled,
+                    contrast = saved.contrast,
+                    reduceMotion = saved.reduceMotion,
+                ),
+            )
+        }
     }
 
     /**
@@ -114,6 +150,8 @@ class DefaultMusicStore(
                     charts = chartsState,
                     playlists = playlistsState,
                     library = libraryState,
+                    // 重启后从 Room 恢复红心集合，避免列表里有喜欢但曲目行不亮红心
+                    favorites = libraryState.favorites.mapTo(linkedSetOf()) { track -> track.id },
                     search = it.search.copy(history = searchUseCase.historySnapshot()),
                 )
             }
@@ -429,16 +467,34 @@ class DefaultMusicStore(
 
     override fun setVolume(volume: Float) = playback.setVolume(volume)
 
+    override fun setPlayMode(mode: PlayMode) {
+        playback.setPlayMode(mode)
+        _state.update { it.copy(notice = "播放模式：${mode.label}") }
+    }
+
+    override fun cyclePlayMode() {
+        val next = playback.cyclePlayMode()
+        _state.update { it.copy(notice = "播放模式：${next.label}") }
+    }
+
     override fun toggleFavorite(track: Track) {
         val already = _state.value.favorites.contains(track.id)
-        // 先写数据源（CoreMusicCatalog 的内存表），再更新 UI 集合：
-        // 「我的」页的喜欢列表读的是数据源，两边不同步会"收藏了但列表里没有"
-        catalog.toggleFavorite(track)
+        // 先乐观更新红心态，再异步落 Room 并刷新「我的」列表
         _state.update {
             it.copy(
                 favorites = if (already) it.favorites - track.id else it.favorites + track.id,
                 notice = if (already) "已取消收藏《${track.title}》" else "已收藏《${track.title}》",
             )
+        }
+        scope.launch {
+            val nowLiked = runCatching { catalog.toggleFavoritePersisted(track) }.getOrDefault(!already)
+            val loaded = libraryUseCase.load()
+            _state.update {
+                it.copy(
+                    library = loaded,
+                    favorites = if (nowLiked) it.favorites + track.id else it.favorites - track.id,
+                )
+            }
         }
     }
 
@@ -446,7 +502,117 @@ class DefaultMusicStore(
         _state.update { it.copy(library = it.library.copy(loading = true, error = "")) }
         scope.launch {
             val loaded = libraryUseCase.load()
-            _state.update { it.copy(library = loaded) }
+            _state.update {
+                it.copy(
+                    library = loaded,
+                    favorites = loaded.favorites.mapTo(linkedSetOf()) { track -> track.id },
+                )
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- 自建歌单 CRUD
+
+    override fun createUserPlaylist(name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isBlank()) return
+        scope.launch {
+            val created = catalog.createUserPlaylist(trimmed)
+            if (created == null) {
+                _state.update { it.copy(notice = "创建歌单失败") }
+                return@launch
+            }
+            val loaded = libraryUseCase.load()
+            _state.update { it.copy(library = loaded, notice = "已创建歌单「${created.name}」") }
+        }
+    }
+
+    override fun renameUserPlaylist(playlistId: String, newName: String) {
+        val trimmed = newName.trim()
+        if (playlistId.isBlank() || trimmed.isBlank()) return
+        scope.launch {
+            val ok = catalog.renameUserPlaylist(playlistId, trimmed)
+            val loaded = libraryUseCase.load()
+            _state.update {
+                it.copy(
+                    library = loaded,
+                    notice = if (ok) "已重命名为「$trimmed」" else "重命名失败",
+                )
+            }
+        }
+    }
+
+    override fun deleteUserPlaylist(playlistId: String) {
+        if (playlistId.isBlank()) return
+        scope.launch {
+            val ok = catalog.deleteUserPlaylist(playlistId)
+            val loaded = libraryUseCase.load()
+            _state.update {
+                it.copy(
+                    library = loaded,
+                    notice = if (ok) "已删除歌单" else "删除歌单失败",
+                )
+            }
+        }
+    }
+
+    override fun addTrackToPlaylist(playlistId: String, track: Track) {
+        scope.launch {
+            val ok = catalog.addTrackToPlaylist(playlistId, track)
+            val loaded = libraryUseCase.load()
+            val targetName = loaded.playlists.firstOrNull { it.id == playlistId }?.name.orEmpty()
+            _state.update {
+                it.copy(
+                    library = loaded,
+                    notice = if (ok) "已加入歌单「${targetName.ifBlank { "我的歌单" }}」" else "加入歌单失败",
+                )
+            }
+        }
+    }
+
+    override fun addTrackToDefaultPlaylist(track: Track) {
+        scope.launch {
+            val existing = _state.value.library.playlists.firstOrNull()
+                ?: catalog.createUserPlaylist("我建的歌单")
+            if (existing == null) {
+                _state.update { it.copy(notice = "加入歌单失败：无法创建歌单") }
+                return@launch
+            }
+            val ok = catalog.addTrackToPlaylist(existing.id, track)
+            val loaded = libraryUseCase.load()
+            _state.update {
+                it.copy(
+                    library = loaded,
+                    notice = if (ok) "已将《${track.title}》加入「${existing.name}」" else "加入歌单失败",
+                )
+            }
+        }
+    }
+
+    override fun removeTrackFromPlaylist(playlistId: String, trackId: String) {
+        scope.launch {
+            val ok = catalog.removeTrackFromPlaylist(playlistId, trackId)
+            val loaded = libraryUseCase.load()
+            _state.update {
+                it.copy(
+                    library = loaded,
+                    notice = if (ok) "已从歌单移除" else "移除失败",
+                )
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- 平台凭据（DPAPI）
+
+    override fun getProviderCookie(providerId: String): String = catalog.getCookie(providerId)
+
+    override fun setProviderCookie(providerId: String, cookie: String) {
+        catalog.setCookie(providerId, cookie)
+        val name = providerName(providerId)
+        _state.update {
+            it.copy(
+                notice = if (cookie.isBlank()) "已清除 $name 登录凭据" else "已保存 $name 登录凭据（DPAPI 加密）",
+            )
         }
     }
 
@@ -480,6 +646,24 @@ class DefaultMusicStore(
 
     override fun setAppearance(appearance: Appearance) {
         _state.update { it.copy(appearance = appearance) }
+        val coreCatalog = catalog as? CoreMusicCatalog ?: return
+        scope.launch {
+            runCatching {
+                val settings = coreCatalog.settingsStore
+                settings.theme(
+                    when (appearance.mode) {
+                        ThemeMode.Dark -> "dark"
+                        ThemeMode.Light -> "light"
+                        ThemeMode.System -> "system"
+                    },
+                )
+                settings.browseStyle(appearance.palette.name)
+                settings.customSeed(appearance.seed.toArgb())
+                settings.amoled(appearance.amoled)
+                settings.contrast(appearance.contrast)
+                settings.reduceMotion(appearance.reduceMotion)
+            }
+        }
     }
 
     override fun clearNotice() {
@@ -492,6 +676,7 @@ class DefaultMusicStore(
 
     override fun shutdown() {
         playback.release()
+        catalog.close()
         scope.cancel()
     }
 

@@ -6,11 +6,9 @@ import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
 import androidx.core.app.NotificationCompat
-import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
-import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
@@ -18,6 +16,12 @@ import com.mytv.mymusic.AppLog
 import com.mytv.mymusic.BackgroundWork
 import com.mytv.mymusic.MyMusicApp
 import com.mytv.mymusic.R
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import java.io.File
 import java.util.UUID
@@ -61,24 +65,42 @@ internal class SharePublishWorker(context: Context, params: WorkerParameters) : 
 
         val audio = File(request.audioPath)
         val cover = request.coverPath?.let(::File)?.takeIf { it.isFile }
+        // 上传百分比：-1 表示还不知道总长，通知栏显示转圈
+        val progress = MutableStateFlow(-1)
+        val title = request.metadata.title
         return try {
-            show("正在上传「${request.metadata.title}」")
-            val client = ShareServiceClient(origin, token)
-            val result = client.create(
-                idempotencyKey = request.idempotencyKey,
-                metadata = request.metadata,
-                audio = audio,
-                audioType = request.audioType,
-                cover = cover?.readBytes(),
-                coverType = request.coverType,
-            )
-            Result.success(
-                workDataOf(
-                    KEY_SHARE_ID to result.id,
-                    KEY_STATUS to result.status,
-                    KEY_URL to result.url,
-                ),
-            )
+            coroutineScope {
+                val ticker = launch(start = CoroutineStart.UNDISPATCHED) {
+                    progress.filter { it >= 0 }.distinctUntilChanged().collect { percent ->
+                        show("正在上传「$title」", percent)
+                    }
+                }
+                try {
+                    val client = ShareServiceClient(origin, token)
+                    val result = client.create(
+                        idempotencyKey = request.idempotencyKey,
+                        metadata = request.metadata,
+                        audio = audio,
+                        audioType = request.audioType,
+                        cover = cover?.readBytes(),
+                        coverType = request.coverType,
+                        onProgress = { done, total ->
+                            if (total > 0) progress.value = ((done * 100) / total).toInt().coerceIn(0, 100)
+                        },
+                    )
+                    // 传完就交给服务端了，进度回到不确定态
+                    show("服务端准备中「$title」")
+                    Result.success(
+                        workDataOf(
+                            KEY_SHARE_ID to result.id,
+                            KEY_STATUS to result.status,
+                            KEY_URL to result.url,
+                        ),
+                    )
+                } finally {
+                    ticker.cancel()
+                }
+            }
         } catch (error: ShareServiceException) {
             AppLog.w(TAG, "发布分享失败：${error.message}")
             // 网络抖动与服务端忙重试有意义；4xx 重试也只是再被拒一次
@@ -96,8 +118,8 @@ internal class SharePublishWorker(context: Context, params: WorkerParameters) : 
         }
     }
 
-    /** 前台通知：Android 12 起后台起前台服务可能被拒，这时按普通后台任务继续。 */
-    private suspend fun show(text: String) {
+    /** 前台通知：Android 12 起后台起前台服务可能被拒，这时按普通后台任务继续。[percent] 小于 0 时显示转圈。 */
+    private suspend fun show(text: String, percent: Int = -1) {
         ensureChannel(applicationContext)
         val notification = NotificationCompat.Builder(applicationContext, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_mymusic)
@@ -108,7 +130,7 @@ internal class SharePublishWorker(context: Context, params: WorkerParameters) : 
             .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-            .setProgress(0, 0, true)
+            .setProgress(100, percent.coerceAtLeast(0), percent < 0)
             .build()
         runCatching {
             setForeground(
@@ -166,4 +188,5 @@ internal class SharePublishWorker(context: Context, params: WorkerParameters) : 
         }
     }
 }
+
 

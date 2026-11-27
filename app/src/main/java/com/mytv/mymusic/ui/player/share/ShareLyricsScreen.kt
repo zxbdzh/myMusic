@@ -209,6 +209,7 @@ internal fun ShareOverlay(
                 SharePage.Clip -> ShareClipEditorScreen(
                     session = session,
                     durationMs = session.song.duration.coerceAtLeast(0) * 1000L,
+                    actions = actions,
                     onBack = { session.page = SharePage.Share },
                     onConfirm = { session.page = SharePage.Share },
                 )

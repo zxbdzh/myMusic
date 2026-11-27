@@ -14,6 +14,10 @@ import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okio.Buffer
+import okio.BufferedSink
+import okio.ForwardingSink
+import okio.buffer
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -101,6 +105,7 @@ internal class ShareServiceClient(
         audioType: String,
         cover: ByteArray? = null,
         coverType: String? = null,
+        onProgress: (uploaded: Long, total: Long) -> Unit = { _, _ -> },
     ): ShareResult {
         val created = readResponse<ShareResult>(
             execute(
@@ -126,7 +131,16 @@ internal class ShareServiceClient(
             ?: throw ShareServiceException(ShareServiceErrorKind.InvalidConfig, "音频的 Content-Type 不合法：$audioType")
         // 202 表示服务端已接管处理，进度从这里开始只在服务端
         return readResponse(
-            execute(requestBuilder(url("api", "shares", created.id, "audio"), "PUT", audio.asRequestBody(type)).build())
+            execute(
+                requestBuilder(
+                    url("api", "shares", created.id, "audio"),
+                    "PUT",
+                    // 上传时按已写字节回报，通知栏的百分比来自这里
+                    CountingRequestBody(audio.asRequestBody(type)) { done ->
+                        onProgress(done, audio.length())
+                    },
+                ).build(),
+            )
         )
     }
 
@@ -228,3 +242,33 @@ internal fun defaultShareHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .readTimeout(15, TimeUnit.MINUTES)
     .writeTimeout(15, TimeUnit.MINUTES)
     .build()
+
+
+/**
+ * 上传过程中按已写字节回报进度。
+ *
+ * 只包一层 sink：OkHttp 分块写文件时逐块累加，[onWritten] 拿到的是累计字节数。
+ * 挂在音频请求体上，封面很小不单独报进度。
+ */
+private class CountingRequestBody(
+    private val delegate: RequestBody,
+    private val onWritten: (Long) -> Unit,
+) : RequestBody() {
+    override fun contentType() = delegate.contentType()
+    override fun contentLength() = delegate.contentLength()
+
+    override fun writeTo(sink: BufferedSink) {
+        var written = 0L
+        val counting = object : ForwardingSink(sink) {
+            override fun write(source: Buffer, byteCount: Long) {
+                super.write(source, byteCount)
+                written += byteCount
+                onWritten(written)
+            }
+        }
+        // 必须显式 flush：只写不刷，尾部字节会留在缓冲里，服务端收到的是截断的文件
+        val buffered = counting.buffer()
+        delegate.writeTo(buffered)
+        buffered.flush()
+    }
+}

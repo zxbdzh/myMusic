@@ -22,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -42,6 +43,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mytv.mymusic.data.share.shareClipRange
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 /**
@@ -56,6 +59,7 @@ import kotlin.math.abs
 internal fun ShareClipEditorScreen(
     session: ShareSession,
     durationMs: Long,
+    actions: com.mytv.mymusic.ui.MusicActions,
     onBack: () -> Unit,
     onConfirm: () -> Unit,
 ) {
@@ -64,6 +68,60 @@ internal fun ShareClipEditorScreen(
     val duration = durationMs.coerceAtLeast(1L)
     val available = session.synced && session.selected.isNotEmpty()
     var trackWidth by remember { mutableFloatStateOf(1f) }
+
+    val scope = rememberCoroutineScope()
+    var previewing by remember { mutableStateOf(false) }
+    var previewError by remember { mutableStateOf("") }
+    var player by remember { mutableStateOf<android.media.MediaPlayer?>(null) }
+
+    fun stopPreview() {
+        previewing = false
+        player?.let { media ->
+            runCatching { media.stop() }
+            runCatching { media.release() }
+        }
+        player = null
+    }
+
+    /** 直接播取流地址，从范围起点开始，到终点自己停；独立实例，不动主播放器。 */
+    fun startPreview(url: String) {
+        stopPreview()
+        val created = android.media.MediaPlayer()
+        player = created
+        runCatching {
+            created.setAudioAttributes(
+                android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build(),
+            )
+            created.setDataSource(url)
+            created.setOnPreparedListener { media ->
+                media.seekTo(session.clipStartMs.toInt())
+                media.start()
+                previewing = true
+                scope.launch {
+                    // 到范围末尾就停，别串到下一句
+                    while (previewing && media.currentPosition < session.clipEndMs) delay(120)
+                    if (previewing) stopPreview()
+                }
+            }
+            created.setOnErrorListener { _, _, _ ->
+                previewError = "试听失败，稍后再试"
+                stopPreview()
+                true
+            }
+            created.prepareAsync()
+        }.onFailure {
+            previewError = "试听失败：${it.message.orEmpty()}"
+            stopPreview()
+        }
+    }
+
+    // 离开这一页必须释放，否则预览会盖在别的歌上继续出声
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose { stopPreview() }
+    }
 
     fun resetFromSelection() {
         val range = shareClipRange(
@@ -199,6 +257,34 @@ internal fun ShareClipEditorScreen(
         }
 
         Spacer(Modifier.weight(1f))
+        // 试听用独立的 MediaPlayer：主播放器可能正在放别的歌，不能被这条预览打断
+        Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(
+                onClick = {
+                    if (previewing) {
+                        stopPreview()
+                    } else {
+                        previewError = ""
+                        scope.launch {
+                            val url = runCatching { actions.shareAudioUrl(session.song) }.getOrNull()
+                            if (url.isNullOrBlank()) {
+                                previewError = "拿不到这首的音频地址，换一首试试"
+                                return@launch
+                            }
+                            startPreview(url)
+                        }
+                    }
+                },
+                enabled = available && session.clipEndMs > session.clipStartMs,
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+            ) {
+                Text(if (previewing) "停止试听" else "试听这一段")
+            }
+        }
+        if (previewError.isNotBlank()) {
+            Text(previewError, fontSize = 11.5.sp, color = scheme.error, modifier = Modifier.padding(bottom = 6.dp))
+        }
         Row(Modifier.fillMaxWidth().padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             TextButton(onClick = onBack, modifier = Modifier.weight(1f)) { Text("取消") }
             Button(
@@ -228,3 +314,4 @@ private const val MIN_CLIP_MS = 1_000L
 /** 手柄颜色（保留给以后做播放头时复用）。 */
 @Suppress("unused")
 private val ClipHandleColor = Color.Unspecified
+

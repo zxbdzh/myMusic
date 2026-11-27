@@ -7160,21 +7160,26 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
      * shortcut: 地址被 CDN 拒绝时这里不自动重新取流，由用户重试一次；接上失效重取后再补。
      */
     private suspend fun prepareShareAudio(song: Song, context: Application): File {
+        val url = shareAudioUrl(song)
+        // 后缀只用来给服务端声明 Content-Type，取的是这次真实地址的后缀
+        val extension = listOf(
+            Uri.parse(url).path?.let { File(it).extension }.orEmpty(),
+            song.ext,
+        ).firstOrNull { it.isNotBlank() }?.lowercase() ?: "mp3"
+        val directory = File(context.cacheDir, "share").apply { mkdirs() }
+        return com.mytv.mymusic.data.share.ShareAudioPreparer(directory, http).prepare(url, extension)
+    }
+
+    /** 分享要用的取流地址：发布时下载它，片段编辑页试听也直接播它（不落盘）。 */
+    suspend fun shareAudioUrl(song: Song): String {
         val resolved = resolvePlayable(canonicalForSong(song), forDownload = true)
         val ready = resolved.resolution as? Resolution.Ready
         if (ready == null || ready.url.isBlank()) error("没有可分享的音频地址")
-        val url = if (ready.source.providerId.startsWith(com.mytv.mymusic.data.subsonic.SUBSONIC_PROVIDER_PREFIX)) {
+        return if (ready.source.providerId.startsWith(com.mytv.mymusic.data.subsonic.SUBSONIC_PROVIDER_PREFIX)) {
             app.repository.downloadUrl(ready.source.song, cookieFor(ready.source.providerId))
         } else {
             ready.url
         }
-        // 后缀只用来给服务端声明 Content-Type，取的是这次真实地址的后缀
-        val extension = listOf(
-            ready.source.song.ext,
-            Uri.parse(url).path?.let { File(it).extension }.orEmpty(),
-        ).firstOrNull { it.isNotBlank() }?.lowercase() ?: "mp3"
-        val directory = File(context.cacheDir, "share").apply { mkdirs() }
-        return com.mytv.mymusic.data.share.ShareAudioPreparer(directory, http).prepare(url, extension)
     }
     fun setLyricStage(transform: (LyricStagePrefs) -> LyricStagePrefs) = viewModelScope.launch { app.settings.lyricStage(transform) }
     fun setLyricText(transform: (LyricTextPrefs) -> LyricTextPrefs) = viewModelScope.launch { app.settings.lyricText(transform) }

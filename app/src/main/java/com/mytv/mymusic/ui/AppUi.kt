@@ -341,6 +341,9 @@ class MusicActions(private val model: MusicViewModel) {
     fun shareListState(): kotlinx.coroutines.flow.StateFlow<com.mytv.mymusic.data.share.ShareListUi> = model.shareList
     fun loadShares() = model.loadShares()
     fun revokeShare(id: String) = model.revokeShare(id)
+
+    /** 分享用的取流地址，片段编辑页拿它试听。 */
+    suspend fun shareAudioUrl(song: com.mytv.mymusic.data.Song): String = model.shareAudioUrl(song)
     fun setLyricStage(transform: (com.mytv.mymusic.data.LyricStagePrefs) -> com.mytv.mymusic.data.LyricStagePrefs) =
         model.setLyricStage(transform)
     fun setLyricText(transform: (com.mytv.mymusic.data.LyricTextPrefs) -> com.mytv.mymusic.data.LyricTextPrefs) =

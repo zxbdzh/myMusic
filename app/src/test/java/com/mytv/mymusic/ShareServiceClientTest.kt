@@ -42,6 +42,27 @@ class ShareServiceClientTest {
     }
 
     @Test
+    fun createReportsUploadProgressUpToTheFileSize() = runTest {
+        server.enqueue(json(201, """{"id":"share-1","status":"awaiting_upload"}"""))
+        server.enqueue(json(202, """{"id":"share-1","status":"processing"}"""))
+        val seen = mutableListOf<Pair<Long, Long>>()
+
+        client.create(
+            idempotencyKey = "idempotency-key-1",
+            metadata = metadata(),
+            audio = audio,
+            audioType = "audio/mpeg",
+            onProgress = { done, total -> seen += done to total },
+        )
+
+        // 进度要单调递增、总长是文件大小，最后一条正好等于总长；否则通知栏的百分比会倒退或永远不到 100
+        assertTrue(seen.isNotEmpty())
+        assertEquals(audio.length(), seen.last().first)
+        assertEquals(audio.length(), seen.last().second)
+        assertEquals(seen.map { it.first }.sorted(), seen.map { it.first })
+    }
+
+    @Test
     fun createUploadsCoverThenAudioWhenServerAwaitsIt() = runTest {
         server.enqueue(json(201, """{"id":"share-1","status":"awaiting_upload"}"""))
         server.enqueue(json(201, """{"id":"share-1","status":"cover_uploaded"}"""))

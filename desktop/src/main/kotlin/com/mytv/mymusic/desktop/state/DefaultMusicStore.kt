@@ -117,6 +117,8 @@ class DefaultMusicStore(
 
     override fun navigate(route: Route) {
         _state.update { it.copy(route = route) }
+        // 进入「我的」时重拉一次：收藏/历史在别的页面会变，缓存到首屏那份早就过期了
+        if (route == Route.Library) refreshLibrary()
     }
 
     // ---------------------------------------------------------------- 音源
@@ -383,6 +385,8 @@ class DefaultMusicStore(
         playback.playQueue(tracks, startIndex)
     }
 
+    override fun playNext(track: Track) = playback.insertNext(track)
+
     override fun togglePlay() {
         val current = _state.value
         if (current.current == null) {
@@ -407,11 +411,22 @@ class DefaultMusicStore(
 
     override fun toggleFavorite(track: Track) {
         val already = _state.value.favorites.contains(track.id)
+        // 先写数据源（CoreMusicCatalog 的内存表），再更新 UI 集合：
+        // 「我的」页的喜欢列表读的是数据源，两边不同步会"收藏了但列表里没有"
+        catalog.toggleFavorite(track)
         _state.update {
             it.copy(
                 favorites = if (already) it.favorites - track.id else it.favorites + track.id,
                 notice = if (already) "已取消收藏《${track.title}》" else "已收藏《${track.title}》",
             )
+        }
+    }
+
+    override fun refreshLibrary() {
+        _state.update { it.copy(library = it.library.copy(loading = true, error = "")) }
+        scope.launch {
+            val loaded = libraryUseCase.load()
+            _state.update { it.copy(library = loaded) }
         }
     }
 

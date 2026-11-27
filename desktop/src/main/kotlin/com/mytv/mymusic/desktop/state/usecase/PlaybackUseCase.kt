@@ -98,6 +98,27 @@ class PlaybackUseCase(
         if (current.playing) audio.pause() else audio.play()
     }
 
+    /**
+     * 右键「下一首播放」：插到当前曲目之后，**不打断**正在播的那首。
+     *
+     * 只改队列与索引，不碰音频后端；已经在队列里的曲目先摘掉再插入，
+     * 避免同一首要放两遍。摘除会让后续索引整体前移，所以插入后要按 id 重新定位当前曲目。
+     */
+    fun insertNext(track: Track) {
+        val current = _state.value
+        if (current.queue.isEmpty()) {
+            playQueue(listOf(track), 0)
+            return
+        }
+        val queue = current.queue.toMutableList()
+        val existing = queue.indexOfFirst { it.id == track.id }
+        if (existing >= 0) queue.removeAt(existing)
+        val insertAt = (current.queueIndex + 1).coerceIn(0, queue.size)
+        queue.add(insertAt, track)
+        val newIndex = queue.indexOfFirst { it.id == current.current?.id }.coerceAtLeast(0)
+        _state.update { it.copy(queue = queue, queueIndex = newIndex) }
+    }
+
     fun next() {
         val current = _state.value
         if (current.queue.isEmpty()) return

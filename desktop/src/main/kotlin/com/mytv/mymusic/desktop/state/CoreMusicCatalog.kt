@@ -282,11 +282,11 @@ class CoreMusicCatalog(
 
     private val favorites = mutableListOf<Song>()
 
-    fun toggleFavorite(track: Track): Boolean {
-        val song = songs[track.id] ?: return false
+    /** 收藏写进内存表；`library()` 读同一份，所以「我的」页能看到刚收藏的歌。 */
+    override fun toggleFavorite(track: Track) {
+        val song = songs[track.id] ?: return
         val removed = favorites.removeAll { it.id == song.id && it.source == song.source }
         if (!removed) favorites += song
-        return !removed
     }
 
     override suspend fun lyrics(track: Track): String {

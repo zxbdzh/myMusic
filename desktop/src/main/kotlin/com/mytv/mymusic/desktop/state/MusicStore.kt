@@ -145,12 +145,17 @@ interface MusicStore {
     // ---- 播放 ----
     fun playTrack(track: Track, queue: List<Track> = emptyList())
     fun playTracks(tracks: List<Track>, startIndex: Int)
+    /** 右键「下一首播放」：把曲目插到当前曲目之后，不动正在播的那首。 */
+    fun playNext(track: Track)
     fun togglePlay()
     fun next()
     fun previous()
     fun seekTo(positionMs: Long)
     fun setVolume(volume: Float)
     fun toggleFavorite(track: Track)
+
+    /** 重新拉「我的」页数据（收藏/历史）；进入「我的」时会自动调，播放与收藏后也用它刷新。 */
+    fun refreshLibrary()
 
     // ---- 覆盖层 ----
     fun openPlayer()

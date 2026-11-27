@@ -57,6 +57,12 @@ interface MusicCatalog {
 
     suspend fun library(): LibraryPayload
 
+    /**
+     * 切换收藏。默认空实现（demo/只读数据源不落库），真实实现在 CoreMusicCatalog 里写内存表，
+     * 等 t2b 的 Room 接线后换成落库。UI 的收藏态仍由 store 的 favorites 集合即时反映。
+     */
+    fun toggleFavorite(track: Track) = Unit
+
     /** 返回原始 LRC / 纯文本；解析交给 `LyricsParser`，这样解析逻辑可以单测、也能搬去 :core。 */
     suspend fun lyrics(track: Track): String
 

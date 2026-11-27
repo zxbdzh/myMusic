@@ -290,6 +290,14 @@ private object ScreenshotRunner {
                 store.bootstrap()
                 shot.prepare(store)
                 delay(700)
+                // 离屏渲染只出一帧，图片是异步拉的：不先把封面预加载好，
+                // 截出来全是首字占位，看起来像"没有封面"。真实运行时会自己刷出来。
+                com.mytv.mymusic.desktop.ui.components.RemoteImages.preloadWithin(
+                    collectCoverUrls(store.state.value),
+                    timeoutMs = 15_000L,
+                )
+                // 图进了缓存，但布局里的 LaunchedEffect 还要一帧才会把 bitmap 显示出来
+                delay(400)
             }
             val scene = ImageComposeScene(width = WIDTH, height = HEIGHT, density = Density(1f)) {
                 AppShell(store)
@@ -310,4 +318,15 @@ private object ScreenshotRunner {
             store.shutdown()
         }
     }
+
+    /** 当前状态里所有可见的封面地址：榜单、歌单、搜索、队列、正在播放。 */
+    private fun collectCoverUrls(state: com.mytv.mymusic.desktop.state.MusicUiState): List<String> = buildList {
+        state.charts.charts.forEach { add(it.coverUrl) }
+        state.charts.hotSongs.forEach { add(it.coverUrl) }
+        state.playlists.recommended.forEach { add(it.coverUrl) }
+        state.playlists.categoryPlaylists.forEach { add(it.coverUrl) }
+        state.search.results.forEach { add(it.coverUrl) }
+        state.queue.forEach { add(it.coverUrl) }
+        state.current?.let { add(it.coverUrl) }
+    }.filter { it.isNotBlank() }.distinct()
 }

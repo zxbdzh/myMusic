@@ -39,6 +39,9 @@ dependencies {
     // currentOs 会按当前平台挑 skiko 的原生库；CI 在 Windows 上打 MSI
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
+    // 图标直接用 Android 端那套 Material 图标，而不是自绘——
+    // 两边图标一模一样才叫"只是适配 PC"（TopTab / 播放控制 / 空态图标都用它）
+    implementation(compose.materialIconsExtended)
 
     // 配色生成沿用 Android 端的 material-kolor（KMP 工程，jvm 变体在 Maven Central 上，
     // 依赖的 compose 版本正好是 1.12.2，和本模块一致）。用它而不是自己写 HCT，

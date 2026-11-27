@@ -59,13 +59,24 @@ fun AppShell(store: MusicStore) {
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.surface),
         ) {
-            Row(Modifier.fillMaxSize()) {
-                AppNavRail(state = state, onSelect = store::navigate)
-                Column(Modifier.weight(1f).fillMaxHeight()) {
-                    Box(Modifier.weight(1f)) {
-                        RouteBody(state = state, store = store)
+            // 宽度分档跟 Android 平板一致：≥1200dp 右侧常驻 380dp 播放窗格，
+            // 更窄时退回底部播放条（840–1199dp 在 Android 上也是底部条）。
+            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
+                val wide = maxWidth >= 1200.dp
+                Row(Modifier.fillMaxSize()) {
+                    AppNavRail(
+                        current = state.route,
+                        engineReady = state.engine.ready,
+                        onSelect = store::navigate,
+                    )
+                    Column(Modifier.weight(1f).fillMaxHeight()) {
+                        Box(Modifier.weight(1f)) {
+                            RouteBody(state = state, store = store)
+                        }
+                        // 宽屏时右侧窗格已经承担了播放控制，不再叠一条底部条
+                        if (!wide) MiniPlayerBar(state = state, store = store)
                     }
-                    MiniPlayerBar(state = state, store = store)
+                    if (wide) NowPlayingPane(state = state, store = store)
                 }
             }
 

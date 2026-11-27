@@ -1,139 +1,93 @@
 package com.mytv.mymusic.desktop.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.automirrored.outlined.QueueMusic
+import androidx.compose.material.icons.filled.Insights
+import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Insights
+import androidx.compose.material.icons.outlined.LibraryMusic
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
-import com.mytv.mymusic.desktop.state.EngineUiState
-import com.mytv.mymusic.desktop.state.MusicUiState
 import com.mytv.mymusic.desktop.state.Route
-import com.mytv.mymusic.desktop.ui.components.AppIcon
-import com.mytv.mymusic.desktop.ui.components.AppIconView
-import com.mytv.mymusic.desktop.ui.components.ExpressiveNavItem
+import com.mytv.mymusic.desktop.ui.components.EngineDot
 
 /**
- * 左侧导航栏（对应 Android 平板/桌面形态的 `TabletNavRail`）：
- * 品牌 + 四个入口 + 底部设置。
+ * 顶部四个入口，与 Android `AppNavigation.kt` 的 `TopTab` 一一对应。
  *
- * 桌面窗口比平板高，留白给到 216dp 放得下文字标签；入口顺序和 Android `TopTab` 一致，
- * 设置不占入口位（Android 手机端也是从"我的"进，桌面额外在底部给一个直达）。
- * 底部的后端状态点不是装饰：libVLC 没装时用户要能一眼看到"现在是模拟输出"。
+ * 图标用同一套 Material 图标（`Icons.Outlined.*` 未选中 / `Icons.Filled.*` 选中），
+ * 顺序、文案、路由都保持与原版一致——这是"只适配 PC"的前提。
+ */
+enum class TopTab(val route: Route, val label: String, val icon: ImageVector, val selectedIcon: ImageVector) {
+    Charts(Route.Charts, "榜单", Icons.Outlined.Insights, Icons.Filled.Insights),
+    Playlists(Route.Playlists, "歌单", Icons.AutoMirrored.Outlined.QueueMusic, Icons.AutoMirrored.Filled.QueueMusic),
+    Search(Route.Search, "搜索", Icons.Outlined.Search, Icons.Filled.Search),
+    Library(Route.Library, "我的", Icons.Outlined.LibraryMusic, Icons.Filled.LibraryMusic),
+}
+
+/**
+ * 左侧导航栏——**逐字照搬** `ui/adaptive/LargeScreen.kt` 的 `TabletNavRail`：
+ * `NavigationRail` + 96dp 宽 + `NavigationRailItem`（图标在上、文字在下）+ 底部设置项。
+ *
+ * 只改了两处：
+ * 1. 选中判断从"路由字符串相等"换成"Route 枚举相等"（桌面没有 NavHost 的字符串路由）；
+ * 2. 底部多加一个后端状态点——安卓没有，但桌面在 libVLC 缺失时必须让用户看见"现在是模拟输出"。
  */
 @Composable
-fun AppNavRail(state: MusicUiState, onSelect: (Route) -> Unit) {
-    Column(
-        Modifier
-            .width(216.dp)
-            .fillMaxHeight()
-            .background(MaterialTheme.colorScheme.surfaceContainerLowest)
-            .padding(vertical = 18.dp),
+fun AppNavRail(current: Route, engineReady: Boolean, onSelect: (Route) -> Unit) {
+    NavigationRail(
+        modifier = Modifier.fillMaxHeight().width(96.dp),
+        containerColor = MaterialTheme.colorScheme.surface,
     ) {
-        Row(
-            Modifier.padding(horizontal = 20.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        TopTab.entries.forEach { tab ->
+            val on = current == tab.route
+            NavigationRailItem(
+                selected = on,
+                onClick = { onSelect(tab.route) },
+                icon = { Icon(if (on) tab.selectedIcon else tab.icon, null) },
+                label = { Text(tab.label) },
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+        }
+        // 把设置项压到底部：与 Android 一致
+        NavigationRail(
+            modifier = Modifier.weight(1f),
+            containerColor = MaterialTheme.colorScheme.surface,
         ) {
-            Box(
-                Modifier
-                    .size(34.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.primary),
-                contentAlignment = Alignment.Center,
-            ) {
-                AppIconView(AppIcon.Music, MaterialTheme.colorScheme.onPrimary, size = 18.dp)
-            }
-            Column {
-                Text(
-                    text = "myMusic",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                    text = "PC 预览版",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        Spacer(Modifier.height(22.dp))
-        listOf(Route.Charts, Route.Playlists, Route.Search, Route.Library).forEach { route ->
-            ExpressiveNavItem(
-                icon = route.icon(),
-                label = route.label,
-                selected = state.route == route,
-                onClick = { onSelect(route) },
-            )
-        }
-        Spacer(Modifier.weight(1f))
-        EngineBadge(state.engine)
-        Spacer(Modifier.height(8.dp))
-        ExpressiveNavItem(
-            icon = AppIcon.Settings,
-            label = Route.Settings.label,
-            selected = state.route == Route.Settings,
-            onClick = { onSelect(Route.Settings) },
-        )
-    }
-}
-
-/** 播放后端状态：就绪是主色点，未就绪是第三色点 + 一行原因。 */
-@Composable
-private fun EngineBadge(engine: EngineUiState) {
-    Row(
-        Modifier
-            .padding(horizontal = 14.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainer)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Box(
-            Modifier
-                .size(8.dp)
-                .clip(CircleShape)
-                .background(
-                    if (engine.ready) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary,
-                ),
-        )
-        Column {
-            Text(
-                text = "播放后端 · ${engine.backend.ifBlank { "未知" }}",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = if (engine.ready) "libVLC 就绪" else "模拟输出（未接真实音频）",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            EngineDot(engineReady)
+            val on = current == Route.Settings
+            NavigationRailItem(
+                selected = on,
+                onClick = { onSelect(Route.Settings) },
+                icon = { Icon(if (on) Icons.Filled.Settings else Icons.Outlined.Settings, null) },
+                label = { Text("设置") },
+                modifier = Modifier.padding(bottom = 16.dp),
             )
         }
     }
 }
 
-/** 路由 → 图标。放在导航栏文件里，避免五个页面各自记一套映射。 */
-fun Route.icon(): AppIcon = when (this) {
-    Route.Charts -> AppIcon.Charts
-    Route.Playlists -> AppIcon.Playlists
-    Route.Search -> AppIcon.Search
-    Route.Library -> AppIcon.Library
-    Route.Settings -> AppIcon.Settings
+/** 路由 → 图标（设置页等单点入口用）。 */
+fun Route.icon(): ImageVector = when (this) {
+    Route.Charts -> Icons.Filled.Insights
+    Route.Playlists -> Icons.AutoMirrored.Filled.QueueMusic
+    Route.Search -> Icons.Filled.Search
+    Route.Library -> Icons.Filled.LibraryMusic
+    Route.Settings -> Icons.Filled.Settings
 }
+
